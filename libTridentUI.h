@@ -21,6 +21,10 @@ Made possible by: Claude Opus 4.6 and Happy_mimimix
 #include <map>
 #include <string>
 #include <stdexcept>
+#include <ocidl.h>
+#include <objsafe.h>
+#include <vector>
+#include <algorithm>
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
@@ -73,9 +77,22 @@ struct DispArgs {
     }
 };
 
+struct ControlInstance_;
+typedef ControlInstance_* hControl;
+struct ControlReg_;
+typedef ControlReg_* hControlClass;
+
 using MethodCallback = std::function<HRESULT(DispArgs&, VARIANT*)>;
+using ControlMethodCallback = std::function<HRESULT(hControl, DispArgs&, VARIANT*)>;
 
 typedef LRESULT (*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* handled);
+typedef LRESULT (*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+typedef HRESULT (*PropertyGetter)(hControl c, VARIANT* result);
+typedef HRESULT (*PropertySetter)(hControl c, VARIANT value);
+typedef HRESULT (*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT (*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef void (*DropLeaveCallback)(hControl c);
+typedef HRESULT (*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 
 inline void TridentInit();
 inline void TridentShutdown();
@@ -116,7 +133,26 @@ inline void SetWndProc(hTrident h, TridentWndProc proc);
 inline void SetUserData(hTrident h, void* data);
 inline void* GetUserData(hTrident h);
 
-// Implementation
+inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = NULL, DWORD style = 0);
+inline void UnregisterControl(hControlClass reg);
+inline CLSID GetControlCLSID(hControlClass reg);
+inline std::wstring CLSIDToString(const CLSID& clsid);
+inline std::wstring GetControlClassId(hControlClass reg);
+inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
+inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name);
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL, int argc = 0);
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL, int argc = 0);
+inline HWND GetControlHWND(hControl c);
+inline void* GetControlUserData(hControl c);
+inline void SetControlUserData(hControl c, void* data);
+inline void InvalidateControl(hControl c);
+inline hControlClass GetControlClass(hControl c);
+inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
+inline void DisableDragDrop(hControl c);
+inline IDataObject* CreateTextDataObject(const wchar_t* text);
+
+// COM implementations
 static const wchar_t* g_trident_wndclass = L"libTridentUI";
 static TridentWindowData_* g_trident_head = NULL;
 
@@ -867,3 +903,509 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
     ReleaseElement(e);
     return result;
 }
+
+// ActiveX stuff
+static CLSID CLSIDFromName(const wchar_t* name) {
+    CLSID c = {};
+    uint32_t h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0xfedcba98, h4 = 0x76543210;
+    for (const wchar_t* p = name; *p; p++) {
+        h1 ^= (uint8_t)(*p & 0xFF); h1 *= 0x01000193;
+        h2 ^= (uint8_t)(*p >> 8);   h2 *= 0x01000193;
+        h3 ^= (uint8_t)(*p & 0xFF); h3 *= 0x100001b3;
+        h4 ^= (uint8_t)(*p >> 8);   h4 *= 0x100001b3;
+    }
+    c.Data1 = h1;
+    c.Data2 = (USHORT)(h2 & 0xFFFF);
+    c.Data3 = (USHORT)(h3 & 0x0FFF) | 0x4000;
+    memcpy(c.Data4, &h3, 4);
+    memcpy(c.Data4 + 4, &h4, 4);
+    c.Data4[0] = (c.Data4[0] & 0x3F) | 0x80;
+    return c;
+}
+
+struct CLSIDCompare {
+    bool operator()(const CLSID& a, const CLSID& b) const {
+        return memcmp(&a, &b, sizeof(CLSID)) < 0;
+    }
+};
+
+struct DispEntry {
+    enum Type { METHOD, PROPERTY } type;
+    ControlMethodCallback method;   // [MERGE: 改为ControlMethodCallback]
+    PropertyGetter        getter;
+    PropertySetter        setter;
+};
+
+struct ControlReg_ {
+    std::wstring    name;
+    ControlWndProc  wndProc;
+    void*           defaultUserData;
+    CLSID           clsid;
+    DWORD           comCookie;
+    std::wstring    wndClassName;
+    ATOM            wndAtom = 0;
+    DWORD           extraStyle;
+    CRITICAL_SECTION cs;
+    DISPID nextDispId = INT32_MAX;
+    std::map<std::wstring, DISPID> name2id;
+    std::map<DISPID, DispEntry> entries;
+    DISPID nextEventId = INT32_MAX;
+    std::map<std::wstring, DISPID> eventName2Id;
+    ControlReg_()  { InitializeCriticalSection(&cs); }
+    ~ControlReg_() { DeleteCriticalSection(&cs); }
+};
+
+static std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
+    static std::map<CLSID, ControlReg_*, CLSIDCompare> s;
+    return s;
+}
+
+struct ControlInstance_ {
+    ControlReg_*     reg = NULL;
+    HWND             hwnd = NULL;
+    void*            userData = NULL;
+    IOleClientSite*  clientSite = NULL;
+    IOleAdviseHolder* adviseHolder = NULL;
+    IOleInPlaceSite* inPlaceSite = NULL;
+    bool             active = false;
+    bool             uiActive = false;
+    RECT             rcPos;
+    std::map<DWORD, IDispatch*> sinks;
+    DWORD nextCookie = 1;
+    DropCallback       onDrop = NULL;
+    DropEnterCallback  onDragEnter = NULL;
+    DropOverCallback   onDragOver = NULL;
+    DropLeaveCallback  onDragLeave = NULL;
+    bool               dropRegistered = false;
+};
+
+class CtrlConnectionPoint;
+static LRESULT CALLBACK CtrlWndProc(HWND, UINT, WPARAM, LPARAM);
+
+class ActiveXControl :
+    public IOleObject, public IOleInPlaceObject, public IOleInPlaceActiveObject,
+    public IOleControl, public IViewObject2, public IPersistStreamInit,
+    public IObjectSafety, public IDispatch, public IConnectionPointContainer,
+    public IDropTarget, public IDropSource
+{
+public:
+    LONG m_ref;
+    ControlInstance_* m_inst;
+
+    ActiveXControl(ControlReg_* reg) : m_ref(1) {
+        m_inst = new ControlInstance_();
+        m_inst->reg = reg;
+        m_inst->userData = reg->defaultUserData;
+        memset(&m_inst->rcPos, 0, sizeof(RECT));
+    }
+    ~ActiveXControl() {
+        for (auto& kv : m_inst->sinks) if (kv.second) kv.second->Release();
+        if (m_inst->clientSite) m_inst->clientSite->Release();
+        if (m_inst->adviseHolder) m_inst->adviseHolder->Release();
+        if (m_inst->inPlaceSite) m_inst->inPlaceSite->Release();
+        delete m_inst;
+    }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        *ppv = NULL;
+        if      (riid == IID_IUnknown)                  *ppv = static_cast<IOleObject*>(this);
+        else if (riid == IID_IOleObject)                *ppv = static_cast<IOleObject*>(this);
+        else if (riid == IID_IOleWindow)                *ppv = static_cast<IOleInPlaceObject*>(this);
+        else if (riid == IID_IOleInPlaceObject)         *ppv = static_cast<IOleInPlaceObject*>(this);
+        else if (riid == IID_IOleInPlaceActiveObject)   *ppv = static_cast<IOleInPlaceActiveObject*>(this);
+        else if (riid == IID_IOleControl)               *ppv = static_cast<IOleControl*>(this);
+        else if (riid == IID_IViewObject || riid == IID_IViewObject2) *ppv = static_cast<IViewObject2*>(this);
+        else if (riid == IID_IPersist || riid == IID_IPersistStreamInit) *ppv = static_cast<IPersistStreamInit*>(this);
+        else if (riid == IID_IObjectSafety)             *ppv = static_cast<IObjectSafety*>(this);
+        else if (riid == IID_IDispatch)                 *ppv = static_cast<IDispatch*>(this);
+        else if (riid == IID_IConnectionPointContainer) *ppv = static_cast<IConnectionPointContainer*>(this);
+        else if (riid == IID_IDropTarget)               *ppv = static_cast<IDropTarget*>(this);
+        else if (riid == IID_IDropSource)               *ppv = static_cast<IDropSource*>(this);
+        if (*ppv) { AddRef(); return S_OK; }
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+
+    // IOleObject
+    STDMETHODIMP SetClientSite(IOleClientSite* p) override { if (m_inst->clientSite) m_inst->clientSite->Release(); m_inst->clientSite = p; if (p) p->AddRef(); return S_OK; }
+    STDMETHODIMP GetClientSite(IOleClientSite** pp) override { *pp = m_inst->clientSite; if (*pp) (*pp)->AddRef(); return S_OK; }
+    STDMETHODIMP SetHostNames(LPCOLESTR, LPCOLESTR) override { return S_OK; }
+    STDMETHODIMP Close(DWORD) override { if (m_inst->active) InPlaceDeactivate(); return S_OK; }
+    STDMETHODIMP SetMoniker(DWORD, IMoniker*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { *p = NULL; return E_NOTIMPL; }
+    STDMETHODIMP InitFromData(IDataObject*, BOOL, DWORD) override { return E_NOTIMPL; }
+    STDMETHODIMP GetClipboardData(DWORD, IDataObject**) override { return E_NOTIMPL; }
+
+    STDMETHODIMP DoVerb(LONG iVerb, LPMSG, IOleClientSite*, LONG, HWND hwndParent, LPCRECT prc) override {
+        if (iVerb == OLEIVERB_INPLACEACTIVATE || iVerb == OLEIVERB_UIACTIVATE || iVerb == OLEIVERB_SHOW) {
+            if (!m_inst->active) {
+                if (!m_inst->clientSite) return E_FAIL;
+                if (m_inst->inPlaceSite) { m_inst->inPlaceSite->Release(); m_inst->inPlaceSite = NULL; }
+                m_inst->clientSite->QueryInterface(IID_IOleInPlaceSite, (void**)&m_inst->inPlaceSite);
+                if (!m_inst->inPlaceSite) return E_FAIL;
+                m_inst->inPlaceSite->CanInPlaceActivate();
+                m_inst->inPlaceSite->OnInPlaceActivate();
+                IOleObject* pOle = NULL;
+                QueryInterface(IID_IOleObject, (void**)&pOle);
+                if (pOle) { OleLockRunning(pOle, TRUE, FALSE); pOle->Release(); }
+                IOleInPlaceFrame* pFrame = NULL; IOleInPlaceUIWindow* pUIWin = NULL;
+                RECT rcPos, rcClip; OLEINPLACEFRAMEINFO fi = { sizeof(fi) };
+                m_inst->inPlaceSite->GetWindowContext(&pFrame, &pUIWin, &rcPos, &rcClip, &fi);
+                if (prc) rcPos = *prc;
+                m_inst->rcPos = rcPos;
+                HWND hwndC = NULL; m_inst->inPlaceSite->GetWindow(&hwndC);
+                if (!m_inst->reg->wndAtom) {
+                    WNDCLASSEXW wc = { sizeof(wc) };
+                    wc.lpfnWndProc = CtrlWndProc;
+                    wc.hInstance = GetModuleHandle(NULL);
+                    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+                    wc.lpszClassName = m_inst->reg->wndClassName.c_str();
+                    m_inst->reg->wndAtom = RegisterClassExW(&wc);
+                }
+                m_inst->hwnd = CreateWindowExW(0, m_inst->reg->wndClassName.c_str(), NULL,
+                    WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | m_inst->reg->extraStyle,
+                    rcPos.left, rcPos.top, rcPos.right - rcPos.left, rcPos.bottom - rcPos.top,
+                    hwndC, NULL, GetModuleHandle(NULL), this);
+                m_inst->active = true;
+                if (pFrame) pFrame->Release();
+                if (pUIWin) pUIWin->Release();
+            }
+            if (iVerb == OLEIVERB_UIACTIVATE && !m_inst->uiActive) {
+                m_inst->uiActive = true;
+                if (m_inst->inPlaceSite) m_inst->inPlaceSite->OnUIActivate();
+            }
+            return S_OK;
+        }
+        if (iVerb == OLEIVERB_HIDE) { if (m_inst->hwnd) ShowWindow(m_inst->hwnd, SW_HIDE); return S_OK; }
+        if (iVerb > 0) return OLEOBJ_S_INVALIDVERB;
+        return E_NOTIMPL;
+    }
+
+    STDMETHODIMP EnumVerbs(IEnumOLEVERB**) override { return E_NOTIMPL; }
+    STDMETHODIMP Update() override { return S_OK; }
+    STDMETHODIMP IsUpToDate() override { return S_OK; }
+    STDMETHODIMP GetUserClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
+    STDMETHODIMP GetUserType(DWORD, LPOLESTR*) override { return E_NOTIMPL; }
+    STDMETHODIMP SetExtent(DWORD, SIZEL*) override { return S_OK; }
+    STDMETHODIMP GetExtent(DWORD, SIZEL* p) override {
+        p->cx = MulDiv(m_inst->rcPos.right - m_inst->rcPos.left, 2540, 96);
+        p->cy = MulDiv(m_inst->rcPos.bottom - m_inst->rcPos.top, 2540, 96);
+        return S_OK;
+    }
+    STDMETHODIMP Advise(IAdviseSink* s, DWORD* c) override { if (!m_inst->adviseHolder) CreateOleAdviseHolder(&m_inst->adviseHolder); return m_inst->adviseHolder->Advise(s, c); }
+    STDMETHODIMP Unadvise(DWORD c) override { return m_inst->adviseHolder ? m_inst->adviseHolder->Unadvise(c) : E_FAIL; }
+    STDMETHODIMP EnumAdvise(IEnumSTATDATA** p) override { return m_inst->adviseHolder ? m_inst->adviseHolder->EnumAdvise(p) : E_FAIL; }
+    STDMETHODIMP GetMiscStatus(DWORD, DWORD* p) override { *p = OLEMISC_RECOMPOSEONRESIZE | OLEMISC_INSIDEOUT | OLEMISC_ACTIVATEWHENVISIBLE | OLEMISC_SETCLIENTSITEFIRST; return S_OK; }
+    STDMETHODIMP SetColorScheme(LOGPALETTE*) override { return E_NOTIMPL; }
+
+    STDMETHODIMP GetWindow(HWND* p) override { *p = m_inst->hwnd; return m_inst->hwnd ? S_OK : E_FAIL; }
+    STDMETHODIMP ContextSensitiveHelp(BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP InPlaceDeactivate() override {
+        if (!m_inst->active) return S_OK;
+        UIDeactivate();
+        m_inst->active = false;
+        if (m_inst->dropRegistered) { RevokeDragDrop(m_inst->hwnd); m_inst->dropRegistered = false; }
+        if (m_inst->hwnd) { DestroyWindow(m_inst->hwnd); m_inst->hwnd = NULL; }
+        if (m_inst->inPlaceSite) m_inst->inPlaceSite->OnInPlaceDeactivate();
+        return S_OK;
+    }
+    STDMETHODIMP UIDeactivate() override {
+        if (!m_inst->uiActive) return S_OK;
+        m_inst->uiActive = false;
+        if (m_inst->inPlaceSite) m_inst->inPlaceSite->OnUIDeactivate(FALSE);
+        return S_OK;
+    }
+    STDMETHODIMP SetObjectRects(LPCRECT pPos, LPCRECT) override {
+        if (pPos) { m_inst->rcPos = *pPos; if (m_inst->hwnd) MoveWindow(m_inst->hwnd, pPos->left, pPos->top, pPos->right - pPos->left, pPos->bottom - pPos->top, TRUE); }
+        return S_OK;
+    }
+    STDMETHODIMP ReactivateAndUndo() override { return E_NOTIMPL; }
+
+    STDMETHODIMP TranslateAccelerator(LPMSG msg) override { if (m_inst->hwnd && msg) { ::TranslateMessage(msg); ::DispatchMessage(msg); return S_OK; } return S_FALSE; }
+    STDMETHODIMP OnFrameWindowActivate(BOOL) override { return S_OK; }
+    STDMETHODIMP OnDocWindowActivate(BOOL) override { return S_OK; }
+    STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return S_OK; }
+    STDMETHODIMP EnableModeless(BOOL) override { return S_OK; }
+
+    STDMETHODIMP GetControlInfo(CONTROLINFO* p) override { p->cb = sizeof(CONTROLINFO); p->hAccel = NULL; p->cAccel = 0; p->dwFlags = 0; return S_OK; }
+    STDMETHODIMP OnMnemonic(MSG*) override { return E_NOTIMPL; }
+    STDMETHODIMP OnAmbientPropertyChange(DISPID) override { return S_OK; }
+    STDMETHODIMP FreezeEvents(BOOL) override { return S_OK; }
+
+    STDMETHODIMP Draw(DWORD asp, LONG, void*, DVTARGETDEVICE*, HDC, HDC hdc, LPCRECTL pBounds, LPCRECTL, BOOL(STDMETHODCALLTYPE*)(ULONG_PTR), ULONG_PTR) override {
+        if (asp != DVASPECT_CONTENT || !pBounds || !hdc) return E_INVALIDARG;
+        RECT rc = { pBounds->left, pBounds->top, pBounds->right, pBounds->bottom };
+        if (m_inst->hwnd && IsWindow(m_inst->hwnd))
+            SendMessage(m_inst->hwnd, WM_PRINT, (WPARAM)hdc, PRF_CLIENT | PRF_CHILDREN);
+        else
+            FillRect(hdc, &rc, (HBRUSH)GetStockObject(WHITE_BRUSH));
+        return S_OK;
+    }
+    STDMETHODIMP GetColorSet(DWORD, LONG, void*, DVTARGETDEVICE*, HDC, LOGPALETTE**) override { return E_NOTIMPL; }
+    STDMETHODIMP Freeze(DWORD, LONG, void*, DWORD*) override { return E_NOTIMPL; }
+    STDMETHODIMP Unfreeze(DWORD) override { return E_NOTIMPL; }
+    STDMETHODIMP SetAdvise(DWORD, DWORD, IAdviseSink*) override { return S_OK; }
+    STDMETHODIMP GetAdvise(DWORD*, DWORD*, IAdviseSink**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetExtent(DWORD, LONG, DVTARGETDEVICE*, LPSIZEL p) override { return GetExtent(DVASPECT_CONTENT, p); }
+
+    STDMETHODIMP GetClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
+    STDMETHODIMP IsDirty() override { return S_FALSE; }
+    STDMETHODIMP Load(IStream*) override { return S_OK; }
+    STDMETHODIMP Save(IStream*, BOOL) override { return S_OK; }
+    STDMETHODIMP GetSizeMax(ULARGE_INTEGER* p) override { p->QuadPart = 0; return S_OK; }
+    STDMETHODIMP InitNew() override { return S_OK; }
+
+    STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override { *sup = *en = INTERFACESAFE_FOR_UNTRUSTED_CALLER | INTERFACESAFE_FOR_UNTRUSTED_DATA; return S_OK; }
+    STDMETHODIMP SetInterfaceSafetyOptions(REFIID, DWORD, DWORD) override { return S_OK; }
+
+    STDMETHODIMP GetTypeInfoCount(UINT* p) override { *p = 0; return S_OK; }
+    STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
+        EnterCriticalSection(&m_inst->reg->cs);
+        for (UINT i = 0; i < cnt; i++) { auto it = m_inst->reg->name2id.find(names[i]); ids[i] = (it != m_inst->reg->name2id.end()) ? it->second : DISPID_UNKNOWN; }
+        LeaveCriticalSection(&m_inst->reg->cs);
+        return S_OK;
+    }
+    STDMETHODIMP Invoke(DISPID id, REFIID riid, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
+        if (riid != IID_NULL) return E_INVALIDARG;
+        EnterCriticalSection(&m_inst->reg->cs);
+        auto it = m_inst->reg->entries.find(id);
+        if (it == m_inst->reg->entries.end()) { LeaveCriticalSection(&m_inst->reg->cs); return DISP_E_MEMBERNOTFOUND; }
+        DispEntry entry = it->second;
+        LeaveCriticalSection(&m_inst->reg->cs);
+        if ((wf & DISPATCH_METHOD) && entry.type == DispEntry::METHOD) {
+            DispArgs args = { dp };
+            if (res) VariantInit(res);
+            return entry.method(m_inst, args, res);  // [MERGE: 传hControl]
+        }
+        if ((wf & DISPATCH_PROPERTYGET) && entry.type == DispEntry::PROPERTY && entry.getter) {
+            if (res) VariantInit(res);
+            return entry.getter(m_inst, res);
+        }
+        if ((wf & DISPATCH_PROPERTYPUT) && entry.type == DispEntry::PROPERTY && entry.setter) {
+            if (dp->cArgs > 0) return entry.setter(m_inst, dp->rgvarg[0]);
+            return E_INVALIDARG;
+        }
+        return DISP_E_MEMBERNOTFOUND;
+    }
+
+    STDMETHODIMP EnumConnectionPoints(IEnumConnectionPoints**) override { return E_NOTIMPL; }
+    STDMETHODIMP FindConnectionPoint(REFIID riid, IConnectionPoint** ppCP) override;
+
+    STDMETHODIMP DragEnter(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+        if (m_inst->onDragEnter) return m_inst->onDragEnter(m_inst, pObj, keys, pt, eff);
+        if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
+        *eff = DROPEFFECT_NONE; return S_OK;
+    }
+    STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* eff) override {
+        if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
+        *eff = DROPEFFECT_NONE; return S_OK;
+    }
+    STDMETHODIMP DragLeave() override { if (m_inst->onDragLeave) m_inst->onDragLeave(m_inst); return S_OK; }
+    STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+        if (m_inst->onDrop) return m_inst->onDrop(m_inst, pObj, keys, pt, eff);
+        *eff = DROPEFFECT_NONE; return S_OK;
+    }
+
+    STDMETHODIMP QueryContinueDrag(BOOL fEsc, DWORD keys) override { if (fEsc) return DRAGDROP_S_CANCEL; if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP; return S_OK; }
+    STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
+};
+
+static LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    ActiveXControl* ctrl = NULL;
+    if (msg == WM_NCCREATE) { ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams; SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctrl); }
+    else { ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA); }
+    if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc)
+        return ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp);
+    return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+class CtrlConnectionPoint : public IConnectionPoint {
+    LONG m_ref; ControlInstance_* m_inst;
+public:
+    CtrlConnectionPoint(ControlInstance_* inst) : m_ref(1), m_inst(inst) {}
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IConnectionPoint) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    STDMETHODIMP GetConnectionInterface(IID* p) override { *p = IID_IDispatch; return S_OK; }
+    STDMETHODIMP GetConnectionPointContainer(IConnectionPointContainer**) override { return E_NOTIMPL; }
+    STDMETHODIMP Advise(IUnknown* pSink, DWORD* pCookie) override {
+        if (!pSink || !pCookie) return E_POINTER;
+        IDispatch* disp = NULL;
+        if (FAILED(pSink->QueryInterface(IID_IDispatch, (void**)&disp))) return CONNECT_E_CANNOTCONNECT;
+        *pCookie = m_inst->nextCookie++;
+        m_inst->sinks[*pCookie] = disp;
+        return S_OK;
+    }
+    STDMETHODIMP Unadvise(DWORD cookie) override {
+        auto it = m_inst->sinks.find(cookie);
+        if (it == m_inst->sinks.end()) return CONNECT_E_NOCONNECTION;
+        it->second->Release(); m_inst->sinks.erase(it); return S_OK;
+    }
+    STDMETHODIMP EnumConnections(IEnumConnections**) override { return E_NOTIMPL; }
+};
+
+inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnectionPoint** ppCP) {
+    if (!ppCP) return E_POINTER;
+    if (riid == IID_IDispatch) { *ppCP = new CtrlConnectionPoint(m_inst); return S_OK; }
+    *ppCP = NULL; return CONNECT_E_NOCONNECTION;
+}
+
+class CtrlClassFactory : public IClassFactory {
+    LONG m_ref; ControlReg_* m_reg;
+public:
+    CtrlClassFactory(ControlReg_* r) : m_ref(1), m_reg(r) {}
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IClassFactory) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    STDMETHODIMP CreateInstance(IUnknown* pOuter, REFIID riid, void** ppv) override {
+        if (pOuter) return CLASS_E_NOAGGREGATION;
+        ActiveXControl* c = new ActiveXControl(m_reg);
+        HRESULT hr = c->QueryInterface(riid, ppv);
+        c->Release();
+        return hr;
+    }
+    STDMETHODIMP LockServer(BOOL) override { return S_OK; }
+};
+
+class SimpleDataObject : public IDataObject {
+    LONG m_ref; std::wstring m_text;
+public:
+    SimpleDataObject(const wchar_t* text) : m_ref(1), m_text(text) {}
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IDataObject) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    STDMETHODIMP GetData(FORMATETC* pFmt, STGMEDIUM* pMed) override {
+        if (pFmt->cfFormat != CF_UNICODETEXT || !(pFmt->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
+        size_t bytes = (m_text.size() + 1) * sizeof(wchar_t);
+        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (!hg) return E_OUTOFMEMORY;
+        memcpy(GlobalLock(hg), m_text.c_str(), bytes); GlobalUnlock(hg);
+        pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = NULL;
+        return S_OK;
+    }
+    STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
+    STDMETHODIMP QueryGetData(FORMATETC* p) override { return (p->cfFormat == CF_UNICODETEXT && (p->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC; }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { p->ptd = NULL; return DATA_S_SAMEFORMATETC; }
+    STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
+    STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
+    STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
+    STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+};
+
+// ActiveX API implementations
+inline std::wstring CLSIDToString(const CLSID& clsid) { wchar_t buf[64]; StringFromGUID2(clsid, buf, 64); return buf; }
+inline std::wstring GetControlClassId(hControlClass reg) { return reg ? L"clsid:" + CLSIDToString(reg->clsid) : L""; }
+inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSID_NULL; }
+
+inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
+    if (!name || !proc) return NULL;
+    auto* reg = new ControlReg_();
+    reg->name = name;
+    reg->wndProc = proc;
+    reg->defaultUserData = userData;
+    reg->extraStyle = style;
+    reg->wndClassName = std::wstring(L"TridentControl_") + name;
+    reg->clsid = CLSIDFromName(name);
+    auto* factory = new CtrlClassFactory(reg);
+    HRESULT hr = CoRegisterClassObject(reg->clsid, factory, CLSCTX_INPROC_SERVER, REGCLS_MULTIPLEUSE, &reg->comCookie);
+    factory->Release();
+    if (FAILED(hr)) { delete reg; return NULL; }
+    CtrlRegistry()[reg->clsid] = reg;
+    return reg;
+}
+
+inline void UnregisterControl(hControlClass reg) {
+    if (!reg) return;
+    CoRevokeClassObject(reg->comCookie);
+    if (reg->wndAtom) UnregisterClassW(reg->wndClassName.c_str(), GetModuleHandle(NULL));
+    CtrlRegistry().erase(reg->clsid);
+    delete reg;
+}
+
+inline HWND          GetControlHWND(hControl c) { return c ? c->hwnd : NULL; }
+inline void*         GetControlUserData(hControl c) { return c ? c->userData : NULL; }
+inline void          SetControlUserData(hControl c, void* d) { if (c) c->userData = d; }
+inline void          InvalidateControl(hControl c) { if (c && c->hwnd) ::InvalidateRect(c->hwnd, NULL, TRUE); }
+inline hControlClass GetControlClass(hControl c) { return c ? c->reg : NULL; }
+
+inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb) {
+    if (!reg) return;
+    EnterCriticalSection(&reg->cs);
+    if (reg->name2id.count(name)) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("Method already bound"); }
+    if (reg->nextDispId <= 0) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("DISPID exhausted"); }
+    DISPID id = reg->nextDispId--;
+    reg->name2id[name] = id;
+    reg->entries[id] = { DispEntry::METHOD, cb, NULL, NULL };
+    LeaveCriticalSection(&reg->cs);
+}
+
+inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter) {
+    if (!reg) return;
+    EnterCriticalSection(&reg->cs);
+    auto it = reg->name2id.find(name);
+    DISPID id;
+    if (it != reg->name2id.end()) {
+        id = it->second;
+        auto eit = reg->entries.find(id);
+        if (eit != reg->entries.end() && eit->second.type == DispEntry::PROPERTY) {
+            if (getter) eit->second.getter = getter;
+            if (setter) eit->second.setter = setter;
+            LeaveCriticalSection(&reg->cs);
+            return;
+        }
+        LeaveCriticalSection(&reg->cs);
+        throw std::runtime_error("Name already bound as method");
+    }
+    if (reg->nextDispId <= 0) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("DISPID exhausted"); }
+    id = reg->nextDispId--;
+    reg->name2id[name] = id;
+    reg->entries[id] = { DispEntry::PROPERTY, ControlMethodCallback(), getter, setter };
+    LeaveCriticalSection(&reg->cs);
+}
+
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
+    if (!reg) return DISPID_UNKNOWN;
+    EnterCriticalSection(&reg->cs);
+    if (reg->eventName2Id.count(name)) { DISPID existing = reg->eventName2Id[name]; LeaveCriticalSection(&reg->cs); return existing; }
+    if (reg->nextEventId <= 0) { LeaveCriticalSection(&reg->cs); return DISPID_UNKNOWN; }
+    DISPID id = reg->nextEventId--;
+    reg->eventName2Id[name] = id;
+    LeaveCriticalSection(&reg->cs);
+    return id;
+}
+
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
+    if (!c) return;
+    DISPPARAMS dp = {}; dp.rgvarg = args; dp.cArgs = argc;
+    for (auto& kv : c->sinks) { if (kv.second) kv.second->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL); }
+}
+
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
+    if (!c || !c->reg) return;
+    EnterCriticalSection(&c->reg->cs);
+    auto it = c->reg->eventName2Id.find(name);
+    if (it == c->reg->eventName2Id.end()) { LeaveCriticalSection(&c->reg->cs); return; }
+    DISPID id = it->second;
+    LeaveCriticalSection(&c->reg->cs);
+    FireEvent(c, id, args, argc);
+}
+
+inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter, DropOverCallback onDragOver, DropLeaveCallback onDragLeave) {
+    if (!c || !c->hwnd) return;
+    c->onDrop = onDrop; c->onDragEnter = onDragEnter; c->onDragOver = onDragOver; c->onDragLeave = onDragLeave;
+    if (!c->dropRegistered) {
+        ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
+        if (ctrl) { RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl)); c->dropRegistered = true; }
+    }
+}
+
+inline void DisableDragDrop(hControl c) {
+    if (!c || !c->hwnd || !c->dropRegistered) return;
+    RevokeDragDrop(c->hwnd); c->dropRegistered = false;
+    c->onDrop = NULL; c->onDragEnter = NULL; c->onDragOver = NULL; c->onDragLeave = NULL;
+}
+
+inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text); }
