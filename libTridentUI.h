@@ -1,5 +1,5 @@
 /*
-libTridentUI - v0.1.0 Alpha
+libTridentUI - v0.1.1 Alpha
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by: Claude Opus 4.6 and Happy_mimimix
@@ -263,29 +263,36 @@ public:
     bool Create(HWND hwnd) {
         m_hwnd = hwnd;
 
-        HRESULT hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_ALL,
-                                      IID_IOleObject, (void**)&m_pOle);
+        HRESULT hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_ALL, IID_IOleObject, (void**)&m_pOle);
         if (FAILED(hr)) return false;
 
         m_pOle->SetClientSite(static_cast<IOleClientSite*>(this));
 
         IPersistStreamInit* psi = NULL;
         m_pOle->QueryInterface(IID_IPersistStreamInit, (void**)&psi);
-        if (psi) { psi->InitNew(); psi->Release(); }
+        if (psi) {
+            psi->InitNew();
+            psi->Release();
+        }
+
         hr = m_pOle->QueryInterface(IID_IViewObjectEx, (void**)&m_pView);
         if (FAILED(hr)) hr = m_pOle->QueryInterface(IID_IViewObject2, (void**)&m_pView);
-        if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
+        if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);\
         m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
+
         RECT rc;
         GetClientRect(hwnd, &rc);
-        m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL,
-                       static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
+        m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
+
         IObjectWithSite* pSite = NULL;
         m_pOle->QueryInterface(IID_IObjectWithSite, (void**)&pSite);
-        if (pSite) { pSite->SetSite(static_cast<IOleClientSite*>(this)); pSite->Release(); }
+        if (pSite) {
+            pSite->SetSite(static_cast<IOleClientSite*>(this));
+            pSite->Release();
+        }
         m_pOle->QueryInterface(IID_IWebBrowser2, (void**)&m_pBrowser);
+
         ConnectEvents(TRUE);
-        
         return m_pBrowser != NULL;
     }
     
@@ -403,7 +410,10 @@ public:
     }
     STDMETHODIMP OnInPlaceDeactivateEx(BOOL) override {
         m_bInPlaceActive = false;
-        if (m_pInPlace) { m_pInPlace->Release(); m_pInPlace = NULL; }
+        if (m_pInPlace) {
+            m_pInPlace->Release();
+            m_pInPlace = NULL;
+        }
         return S_OK;
     }
     STDMETHODIMP RequestUIActivate() override { return S_OK; }
@@ -423,15 +433,20 @@ public:
     STDMETHODIMP GetDC(LPCRECT, DWORD grfFlags, HDC* phDC) override {
         if (!phDC) return E_POINTER;
         *phDC = ::GetDC(m_hwnd);
-        if (grfFlags & OLEDC_PAINTBKGND) {
-            RECT rc; GetClientRect(m_hwnd, &rc);
-            FillRect(*phDC, &rc, (HBRUSH)(COLOR_WINDOW + 1));
-        }
         return S_OK;
     }
-    STDMETHODIMP ReleaseDC(HDC h) override { ::ReleaseDC(m_hwnd, h); return S_OK; }
-    STDMETHODIMP InvalidateRect(LPCRECT p, BOOL e) override { ::InvalidateRect(m_hwnd, p, e); return S_OK; }
-    STDMETHODIMP InvalidateRgn(HRGN h, BOOL e) override { ::InvalidateRgn(m_hwnd, h, e); return S_OK; }
+    STDMETHODIMP ReleaseDC(HDC h) override {
+        ::ReleaseDC(m_hwnd, h);
+        return S_OK;
+    }
+    STDMETHODIMP InvalidateRect(LPCRECT p, BOOL e) override {
+        ::InvalidateRect(m_hwnd, p, e);
+        return S_OK;
+    }
+    STDMETHODIMP InvalidateRgn(HRGN h, BOOL e) override {
+        ::InvalidateRgn(m_hwnd, h, e);
+        return S_OK;
+    }
     STDMETHODIMP ScrollRect(INT, INT, LPCRECT, LPCRECT) override { return S_OK; }
     STDMETHODIMP AdjustRect(LPRECT) override { return S_OK; }
     STDMETHODIMP OnDefWindowMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* pr) override {
@@ -455,9 +470,7 @@ public:
     }
     STDMETHODIMP LockContainer(BOOL f) override { m_bLocked = (f != FALSE); return S_OK; }
     STDMETHODIMP ParseDisplayName(IBindCtx*, LPOLESTR, ULONG*, IMoniker**) override { return E_NOTIMPL; }
-    STDMETHODIMP ShowContextMenu(DWORD, POINT*, IUnknown*, IDispatch*) override {
-        return S_OK;  // S_OK = 屏蔽右键菜单
-    }
+    STDMETHODIMP ShowContextMenu(DWORD, POINT*, IUnknown*, IDispatch*) override { return S_OK; }
     STDMETHODIMP GetHostInfo(DOCHOSTUIINFO* p) override {
         if (p) {
             p->cbSize = sizeof(DOCHOSTUIINFO);
@@ -466,8 +479,7 @@ public:
         }
         return S_OK;
     }
-    STDMETHODIMP ShowUI(DWORD, IOleInPlaceActiveObject*, IOleCommandTarget*,
-                        IOleInPlaceFrame*, IOleInPlaceUIWindow*) override { return S_FALSE; }
+    STDMETHODIMP ShowUI(DWORD, IOleInPlaceActiveObject*, IOleCommandTarget*, IOleInPlaceFrame*, IOleInPlaceUIWindow*) override { return S_FALSE; }
     STDMETHODIMP HideUI() override { return S_OK; }
     STDMETHODIMP UpdateUI() override { return S_OK; }
     STDMETHODIMP EnableModeless(BOOL) override { return S_OK; }
@@ -490,8 +502,7 @@ public:
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
     STDMETHODIMP Invoke(DISPID id, REFIID riid, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override {
         if (riid != IID_NULL) return E_INVALIDARG;
-        if (id == DISPID_NAVIGATECOMPLETE2 || id == DISPID_DOCUMENTCOMPLETE)
-            SetupUIHandler();
+        if (id == DISPID_NAVIGATECOMPLETE2 || id == DISPID_DOCUMENTCOMPLETE) SetupUIHandler();
         return S_OK;
     }
 
@@ -503,7 +514,7 @@ private:
         IConnectionPoint* cp = NULL;
         if (SUCCEEDED(cpc->FindConnectionPoint(DIID_DWebBrowserEvents2, &cp))) {
             if (advise) cp->Advise(static_cast<IDispatch*>(this), &m_cookie);
-            else        cp->Unadvise(m_cookie);
+            else cp->Unadvise(m_cookie);
             cp->Release();
         }
         cpc->Release();
@@ -515,11 +526,22 @@ private:
         STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
             if (riid == IID_IUnknown || riid == IID_IOleInPlaceFrame ||
                 riid == IID_IOleWindow || riid == IID_IOleInPlaceUIWindow)
-                { *ppv = static_cast<IOleInPlaceFrame*>(this); AddRef(); return S_OK; }
-            *ppv = NULL; return E_NOINTERFACE;
+                {
+                *ppv = static_cast<IOleInPlaceFrame*>(this);
+                AddRef();
+                return S_OK;
+            }
+            *ppv = NULL;
+            return E_NOINTERFACE;
         }
         STDMETHODIMP_(ULONG) AddRef()  override { return ++m_r; }
-        STDMETHODIMP_(ULONG) Release() override { if (--m_r == 0) { delete this; return 0; } return m_r; }
+        STDMETHODIMP_(ULONG) Release() override {
+            if (--m_r == 0) {
+                delete this;
+                return 0;
+            }
+            return m_r;
+        }
         STDMETHODIMP GetWindow(HWND* p) override { *p = m_h; return S_OK; }
         STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
         STDMETHODIMP GetBorder(LPRECT) override { return S_OK; }
@@ -544,7 +566,13 @@ private:
             *ppv = NULL; return E_NOINTERFACE;
         }
         STDMETHODIMP_(ULONG) AddRef()  override { return ++m_r; }
-        STDMETHODIMP_(ULONG) Release() override { if (--m_r == 0) { delete this; return 0; } return m_r; }
+        STDMETHODIMP_(ULONG) Release() override {
+            if (--m_r == 0) {
+                delete this;
+                return 0;
+            }
+            return m_r;
+        }
         STDMETHODIMP Next(ULONG, IUnknown** p, ULONG* f) override {                // [DUILIB-AX:88-96]
             if (f) *f = 0;
             if (++m_pos > 1) return S_FALSE;
@@ -594,8 +622,14 @@ static LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
             LRESULT r = h->userProc(h, hwnd, msg, wp, lp, &handled);
             if (handled) return r;
         }
-        if (msg == WM_SIZE && h->site) { h->site->Resize(LOWORD(lp), HIWORD(lp)); return 0; }
-        if (msg == WM_CLOSE) { CloseTridentWindow(h); return 0; }
+        if (msg == WM_SIZE && h->site) {
+            h->site->Resize(LOWORD(lp), HIWORD(lp));
+            return 0;
+        }
+        if (msg == WM_CLOSE) {
+            CloseTridentWindow(h);
+            return 0;
+        }
     }
     
     return DefWindowProc(hwnd, msg, wp, lp);
@@ -661,8 +695,15 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
 inline void CloseTridentWindow(hTrident h) {
     if (!h || !h->alive) return;
     h->alive = false;
-    if (h->site) { h->site->Destroy(); delete h->site; h->site = NULL; }
-    if (h->hwnd) { DestroyWindow(h->hwnd); h->hwnd = NULL; }
+    if (h->site) {
+        h->site->Destroy();
+        delete h->site;
+        h->site = NULL;
+    }
+    if (h->hwnd) {
+        DestroyWindow(h->hwnd);
+        h->hwnd = NULL;
+    }
     // Remove from chain
     TridentWindowData_** pp = &g_trident_head;
     while (*pp) {
@@ -698,8 +739,8 @@ inline void NavigateTo(hTrident h, const wchar_t* url) {
 }
 
 inline void NavigateToRes(hTrident h, const wchar_t* resName) {
-    wchar_t exe[MAX_PATH + 1] = {};
-    GetModuleFileNameW(NULL, exe, MAX_PATH);
+    wchar_t exe[1<<10+1] = {};
+    GetModuleFileNameW(NULL, exe, 1 << 10);
     std::wstring url = L"res://";
     url += exe;
     url += L"/";
@@ -932,26 +973,26 @@ struct CLSIDCompare {
 struct DispEntry {
     enum Type { METHOD, PROPERTY } type;
     ControlMethodCallback method;   // [MERGE: 改为ControlMethodCallback]
-    PropertyGetter        getter;
-    PropertySetter        setter;
+    PropertyGetter getter;
+    PropertySetter setter;
 };
 
 struct ControlReg_ {
-    std::wstring    name;
-    ControlWndProc  wndProc;
-    void*           defaultUserData;
-    CLSID           clsid;
-    DWORD           comCookie;
-    std::wstring    wndClassName;
-    ATOM            wndAtom = 0;
-    DWORD           extraStyle;
+    std::wstring name;
+    ControlWndProc wndProc;
+    void* defaultUserData;
+    CLSID clsid;
+    DWORD comCookie;
+    std::wstring wndClassName;
+    ATOM wndAtom = 0;
+    DWORD extraStyle;
     CRITICAL_SECTION cs;
     DISPID nextDispId = INT32_MAX;
     std::map<std::wstring, DISPID> name2id;
     std::map<DISPID, DispEntry> entries;
     DISPID nextEventId = INT32_MAX;
     std::map<std::wstring, DISPID> eventName2Id;
-    ControlReg_()  { InitializeCriticalSection(&cs); }
+    ControlReg_() { InitializeCriticalSection(&cs); }
     ~ControlReg_() { DeleteCriticalSection(&cs); }
 };
 
@@ -961,22 +1002,23 @@ static std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
 }
 
 struct ControlInstance_ {
-    ControlReg_*     reg = NULL;
-    HWND             hwnd = NULL;
-    void*            userData = NULL;
-    IOleClientSite*  clientSite = NULL;
+    ControlReg_* reg = NULL;
+    HWND hwnd = NULL;
+    void* userData = NULL;
+    IOleClientSite* clientSite = NULL;
     IOleAdviseHolder* adviseHolder = NULL;
     IOleInPlaceSite* inPlaceSite = NULL;
-    bool             active = false;
-    bool             uiActive = false;
-    RECT             rcPos;
+    bool active = false;
+    bool uiActive = false;
+    RECT rcPos;
+    SIZEL extent = { 0, 0 };
     std::map<DWORD, IDispatch*> sinks;
     DWORD nextCookie = 1;
-    DropCallback       onDrop = NULL;
-    DropEnterCallback  onDragEnter = NULL;
-    DropOverCallback   onDragOver = NULL;
-    DropLeaveCallback  onDragLeave = NULL;
-    bool               dropRegistered = false;
+    DropCallback onDrop = NULL;
+    DropEnterCallback onDragEnter = NULL;
+    DropOverCallback onDragOver = NULL;
+    DropLeaveCallback onDragLeave = NULL;
+    bool dropRegistered = false;
 };
 
 class CtrlConnectionPoint;
@@ -986,7 +1028,7 @@ class ActiveXControl :
     public IOleObject, public IOleInPlaceObject, public IOleInPlaceActiveObject,
     public IOleControl, public IViewObject2, public IPersistStreamInit,
     public IObjectSafety, public IDispatch, public IConnectionPointContainer,
-    public IDropTarget, public IDropSource
+    public IDropTarget, public IDropSource, public IProvideClassInfo2
 {
 public:
     LONG m_ref;
@@ -1008,19 +1050,20 @@ public:
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         *ppv = NULL;
-        if      (riid == IID_IUnknown)                  *ppv = static_cast<IOleObject*>(this);
-        else if (riid == IID_IOleObject)                *ppv = static_cast<IOleObject*>(this);
-        else if (riid == IID_IOleWindow)                *ppv = static_cast<IOleInPlaceObject*>(this);
-        else if (riid == IID_IOleInPlaceObject)         *ppv = static_cast<IOleInPlaceObject*>(this);
-        else if (riid == IID_IOleInPlaceActiveObject)   *ppv = static_cast<IOleInPlaceActiveObject*>(this);
-        else if (riid == IID_IOleControl)               *ppv = static_cast<IOleControl*>(this);
+        if (riid == IID_IUnknown) *ppv = static_cast<IOleObject*>(this);
+        else if (riid == IID_IOleObject) *ppv = static_cast<IOleObject*>(this);
+        else if (riid == IID_IOleWindow) *ppv = static_cast<IOleInPlaceObject*>(this);
+        else if (riid == IID_IOleInPlaceObject) *ppv = static_cast<IOleInPlaceObject*>(this);
+        else if (riid == IID_IOleInPlaceActiveObject) *ppv = static_cast<IOleInPlaceActiveObject*>(this);
+        else if (riid == IID_IOleControl) *ppv = static_cast<IOleControl*>(this);
         else if (riid == IID_IViewObject || riid == IID_IViewObject2) *ppv = static_cast<IViewObject2*>(this);
         else if (riid == IID_IPersist || riid == IID_IPersistStreamInit) *ppv = static_cast<IPersistStreamInit*>(this);
-        else if (riid == IID_IObjectSafety)             *ppv = static_cast<IObjectSafety*>(this);
-        else if (riid == IID_IDispatch)                 *ppv = static_cast<IDispatch*>(this);
+        else if (riid == IID_IObjectSafety) *ppv = static_cast<IObjectSafety*>(this);
+        else if (riid == IID_IDispatch)  *ppv = static_cast<IDispatch*>(this);
         else if (riid == IID_IConnectionPointContainer) *ppv = static_cast<IConnectionPointContainer*>(this);
-        else if (riid == IID_IDropTarget)               *ppv = static_cast<IDropTarget*>(this);
-        else if (riid == IID_IDropSource)               *ppv = static_cast<IDropSource*>(this);
+        else if (riid == IID_IDropTarget) *ppv = static_cast<IDropTarget*>(this);
+        else if (riid == IID_IDropSource) *ppv = static_cast<IDropSource*>(this);
+        else if (riid == IID_IProvideClassInfo || riid == IID_IProvideClassInfo2) *ppv = static_cast<IProvideClassInfo2*>(this);
         if (*ppv) { AddRef(); return S_OK; }
         return E_NOINTERFACE;
     }
@@ -1041,22 +1084,35 @@ public:
         if (iVerb == OLEIVERB_INPLACEACTIVATE || iVerb == OLEIVERB_UIACTIVATE || iVerb == OLEIVERB_SHOW) {
             if (!m_inst->active) {
                 if (!m_inst->clientSite) return E_FAIL;
-                if (m_inst->inPlaceSite) { m_inst->inPlaceSite->Release(); m_inst->inPlaceSite = NULL; }
+                if (m_inst->inPlaceSite) {
+                    m_inst->inPlaceSite->Release();
+                    m_inst->inPlaceSite = NULL;
+                }
                 m_inst->clientSite->QueryInterface(IID_IOleInPlaceSite, (void**)&m_inst->inPlaceSite);
                 if (!m_inst->inPlaceSite) return E_FAIL;
                 m_inst->inPlaceSite->CanInPlaceActivate();
                 m_inst->inPlaceSite->OnInPlaceActivate();
                 IOleObject* pOle = NULL;
                 QueryInterface(IID_IOleObject, (void**)&pOle);
-                if (pOle) { OleLockRunning(pOle, TRUE, FALSE); pOle->Release(); }
+                if (pOle) {
+                    OleLockRunning(pOle, TRUE, FALSE);
+                    pOle->Release();
+                }
                 IOleInPlaceFrame* pFrame = NULL; IOleInPlaceUIWindow* pUIWin = NULL;
                 RECT rcPos, rcClip; OLEINPLACEFRAMEINFO fi = { sizeof(fi) };
                 m_inst->inPlaceSite->GetWindowContext(&pFrame, &pUIWin, &rcPos, &rcClip, &fi);
                 if (prc) rcPos = *prc;
+                int w = rcPos.right - rcPos.left;
+                int h = rcPos.bottom - rcPos.top;
+                if (w <= 0 && m_inst->extent.cx > 0) w = MulDiv(m_inst->extent.cx, 96, 2540);
+                if (h <= 0 && m_inst->extent.cy > 0) h = MulDiv(m_inst->extent.cy, 96, 2540);
+                rcPos.right = rcPos.left + w;
+                rcPos.bottom = rcPos.top + h;
                 m_inst->rcPos = rcPos;
                 HWND hwndC = NULL; m_inst->inPlaceSite->GetWindow(&hwndC);
                 if (!m_inst->reg->wndAtom) {
                     WNDCLASSEXW wc = { sizeof(wc) };
+                    wc.style = CS_HREDRAW | CS_VREDRAW;
                     wc.lpfnWndProc = CtrlWndProc;
                     wc.hInstance = GetModuleHandle(NULL);
                     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -1068,6 +1124,7 @@ public:
                     rcPos.left, rcPos.top, rcPos.right - rcPos.left, rcPos.bottom - rcPos.top,
                     hwndC, NULL, GetModuleHandle(NULL), this);
                 m_inst->active = true;
+                ::InvalidateRect(m_inst->hwnd, NULL, TRUE);
                 if (pFrame) pFrame->Release();
                 if (pUIWin) pUIWin->Release();
             }
@@ -1077,7 +1134,10 @@ public:
             }
             return S_OK;
         }
-        if (iVerb == OLEIVERB_HIDE) { if (m_inst->hwnd) ShowWindow(m_inst->hwnd, SW_HIDE); return S_OK; }
+        if (iVerb == OLEIVERB_HIDE) {
+            if (m_inst->hwnd) ShowWindow(m_inst->hwnd, SW_HIDE);
+            return S_OK;
+        }
         if (iVerb > 0) return OLEOBJ_S_INVALIDVERB;
         return E_NOTIMPL;
     }
@@ -1087,16 +1147,35 @@ public:
     STDMETHODIMP IsUpToDate() override { return S_OK; }
     STDMETHODIMP GetUserClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
     STDMETHODIMP GetUserType(DWORD, LPOLESTR*) override { return E_NOTIMPL; }
-    STDMETHODIMP SetExtent(DWORD, SIZEL*) override { return S_OK; }
-    STDMETHODIMP GetExtent(DWORD, SIZEL* p) override {
-        p->cx = MulDiv(m_inst->rcPos.right - m_inst->rcPos.left, 2540, 96);
-        p->cy = MulDiv(m_inst->rcPos.bottom - m_inst->rcPos.top, 2540, 96);
+    STDMETHODIMP SetExtent(DWORD dwAspect, SIZEL* pSizel) override {
+        if (dwAspect != DVASPECT_CONTENT || !pSizel) return E_INVALIDARG;
+        m_inst->extent = *pSizel;
+        if (m_inst->hwnd) {
+            int w = MulDiv(pSizel->cx, 96, 2540);
+            int h = MulDiv(pSizel->cy, 96, 2540);
+            SetWindowPos(m_inst->hwnd, NULL, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
+        }
         return S_OK;
     }
-    STDMETHODIMP Advise(IAdviseSink* s, DWORD* c) override { if (!m_inst->adviseHolder) CreateOleAdviseHolder(&m_inst->adviseHolder); return m_inst->adviseHolder->Advise(s, c); }
+    STDMETHODIMP GetExtent(DWORD, SIZEL* p) override {
+        if (m_inst->extent.cx > 0 && m_inst->extent.cy > 0) {
+            *p = m_inst->extent;
+        } else {
+            p->cx = MulDiv(m_inst->rcPos.right - m_inst->rcPos.left, 2540, 96);
+            p->cy = MulDiv(m_inst->rcPos.bottom - m_inst->rcPos.top, 2540, 96);
+        }
+        return S_OK;
+    }
+    STDMETHODIMP Advise(IAdviseSink* s, DWORD* c) override {
+        if (!m_inst->adviseHolder) CreateOleAdviseHolder(&m_inst->adviseHolder);
+        return m_inst->adviseHolder->Advise(s, c);
+    }
     STDMETHODIMP Unadvise(DWORD c) override { return m_inst->adviseHolder ? m_inst->adviseHolder->Unadvise(c) : E_FAIL; }
     STDMETHODIMP EnumAdvise(IEnumSTATDATA** p) override { return m_inst->adviseHolder ? m_inst->adviseHolder->EnumAdvise(p) : E_FAIL; }
-    STDMETHODIMP GetMiscStatus(DWORD, DWORD* p) override { *p = OLEMISC_RECOMPOSEONRESIZE | OLEMISC_INSIDEOUT | OLEMISC_ACTIVATEWHENVISIBLE | OLEMISC_SETCLIENTSITEFIRST; return S_OK; }
+    STDMETHODIMP GetMiscStatus(DWORD, DWORD* p) override {
+        *p = OLEMISC_RECOMPOSEONRESIZE | OLEMISC_INSIDEOUT | OLEMISC_ACTIVATEWHENVISIBLE | OLEMISC_SETCLIENTSITEFIRST;
+        return S_OK;
+    }
     STDMETHODIMP SetColorScheme(LOGPALETTE*) override { return E_NOTIMPL; }
 
     STDMETHODIMP GetWindow(HWND* p) override { *p = m_inst->hwnd; return m_inst->hwnd ? S_OK : E_FAIL; }
@@ -1105,8 +1184,14 @@ public:
         if (!m_inst->active) return S_OK;
         UIDeactivate();
         m_inst->active = false;
-        if (m_inst->dropRegistered) { RevokeDragDrop(m_inst->hwnd); m_inst->dropRegistered = false; }
-        if (m_inst->hwnd) { DestroyWindow(m_inst->hwnd); m_inst->hwnd = NULL; }
+        if (m_inst->dropRegistered) {
+            RevokeDragDrop(m_inst->hwnd);
+            m_inst->dropRegistered = false;
+        }
+        if (m_inst->hwnd) {
+            DestroyWindow(m_inst->hwnd);
+            m_inst->hwnd = NULL;
+        }
         if (m_inst->inPlaceSite) m_inst->inPlaceSite->OnInPlaceDeactivate();
         return S_OK;
     }
@@ -1117,18 +1202,38 @@ public:
         return S_OK;
     }
     STDMETHODIMP SetObjectRects(LPCRECT pPos, LPCRECT) override {
-        if (pPos) { m_inst->rcPos = *pPos; if (m_inst->hwnd) MoveWindow(m_inst->hwnd, pPos->left, pPos->top, pPos->right - pPos->left, pPos->bottom - pPos->top, TRUE); }
+        if (pPos) {
+            m_inst->rcPos = *pPos;
+            if (m_inst->hwnd)
+                SetWindowPos(m_inst->hwnd, HWND_TOP,
+                    pPos->left, pPos->top,
+                    pPos->right - pPos->left, pPos->bottom - pPos->top,
+                    SWP_SHOWWINDOW);
+        }
         return S_OK;
     }
     STDMETHODIMP ReactivateAndUndo() override { return E_NOTIMPL; }
 
-    STDMETHODIMP TranslateAccelerator(LPMSG msg) override { if (m_inst->hwnd && msg) { ::TranslateMessage(msg); ::DispatchMessage(msg); return S_OK; } return S_FALSE; }
+    STDMETHODIMP TranslateAccelerator(LPMSG msg) override {
+        if (m_inst->hwnd && msg) {
+            ::TranslateMessage(msg);
+            ::DispatchMessage(msg);
+            return S_OK;
+        }
+        return S_FALSE;
+    }
     STDMETHODIMP OnFrameWindowActivate(BOOL) override { return S_OK; }
     STDMETHODIMP OnDocWindowActivate(BOOL) override { return S_OK; }
     STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return S_OK; }
     STDMETHODIMP EnableModeless(BOOL) override { return S_OK; }
 
-    STDMETHODIMP GetControlInfo(CONTROLINFO* p) override { p->cb = sizeof(CONTROLINFO); p->hAccel = NULL; p->cAccel = 0; p->dwFlags = 0; return S_OK; }
+    STDMETHODIMP GetControlInfo(CONTROLINFO* p) override {
+        p->cb = sizeof(CONTROLINFO);
+        p->hAccel = NULL;
+        p->cAccel = 0;
+        p->dwFlags = 0;
+        return S_OK;
+    }
     STDMETHODIMP OnMnemonic(MSG*) override { return E_NOTIMPL; }
     STDMETHODIMP OnAmbientPropertyChange(DISPID) override { return S_OK; }
     STDMETHODIMP FreezeEvents(BOOL) override { return S_OK; }
@@ -1156,14 +1261,27 @@ public:
     STDMETHODIMP GetSizeMax(ULARGE_INTEGER* p) override { p->QuadPart = 0; return S_OK; }
     STDMETHODIMP InitNew() override { return S_OK; }
 
-    STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override { *sup = *en = INTERFACESAFE_FOR_UNTRUSTED_CALLER | INTERFACESAFE_FOR_UNTRUSTED_DATA; return S_OK; }
+    STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override {
+        *sup = *en = INTERFACESAFE_FOR_UNTRUSTED_CALLER | INTERFACESAFE_FOR_UNTRUSTED_DATA;
+        return S_OK;
+    }
     STDMETHODIMP SetInterfaceSafetyOptions(REFIID, DWORD, DWORD) override { return S_OK; }
+
+    STDMETHODIMP GetClassInfo(ITypeInfo**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetGUID(DWORD dwGuidKind, GUID* pGUID) override {
+        if (!pGUID) return E_POINTER;
+        if (dwGuidKind == GUIDKIND_DEFAULT_SOURCE_DISP_IID) { *pGUID = IID_IDispatch; return S_OK; }
+        return E_INVALIDARG;
+    }
 
     STDMETHODIMP GetTypeInfoCount(UINT* p) override { *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
         EnterCriticalSection(&m_inst->reg->cs);
-        for (UINT i = 0; i < cnt; i++) { auto it = m_inst->reg->name2id.find(names[i]); ids[i] = (it != m_inst->reg->name2id.end()) ? it->second : DISPID_UNKNOWN; }
+        for (UINT i = 0; i < cnt; i++) {
+            auto it = m_inst->reg->name2id.find(names[i]);
+            ids[i] = (it != m_inst->reg->name2id.end()) ? it->second : DISPID_UNKNOWN;
+        }
         LeaveCriticalSection(&m_inst->reg->cs);
         return S_OK;
     }
@@ -1171,7 +1289,10 @@ public:
         if (riid != IID_NULL) return E_INVALIDARG;
         EnterCriticalSection(&m_inst->reg->cs);
         auto it = m_inst->reg->entries.find(id);
-        if (it == m_inst->reg->entries.end()) { LeaveCriticalSection(&m_inst->reg->cs); return DISP_E_MEMBERNOTFOUND; }
+        if (it == m_inst->reg->entries.end()) {
+            LeaveCriticalSection(&m_inst->reg->cs);
+            return DISP_E_MEMBERNOTFOUND;
+        }
         DispEntry entry = it->second;
         LeaveCriticalSection(&m_inst->reg->cs);
         if ((wf & DISPATCH_METHOD) && entry.type == DispEntry::METHOD) {
@@ -1202,20 +1323,32 @@ public:
         if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
-    STDMETHODIMP DragLeave() override { if (m_inst->onDragLeave) m_inst->onDragLeave(m_inst); return S_OK; }
+    STDMETHODIMP DragLeave() override {
+        if (m_inst->onDragLeave) m_inst->onDragLeave(m_inst);
+        return S_OK;
+    }
     STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
         if (m_inst->onDrop) return m_inst->onDrop(m_inst, pObj, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
 
-    STDMETHODIMP QueryContinueDrag(BOOL fEsc, DWORD keys) override { if (fEsc) return DRAGDROP_S_CANCEL; if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP; return S_OK; }
+    STDMETHODIMP QueryContinueDrag(BOOL fEsc, DWORD keys) override {
+        if (fEsc) return DRAGDROP_S_CANCEL;
+        if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
     STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 };
 
 static LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ActiveXControl* ctrl = NULL;
-    if (msg == WM_NCCREATE) { ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams; SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctrl); }
-    else { ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA); }
+    if (msg == WM_NCCREATE) {
+        ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams;
+        SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctrl);
+    }
+    else {
+        ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    }
     if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc)
         return ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp);
     return DefWindowProc(hwnd, msg, wp, lp);
@@ -1225,10 +1358,26 @@ class CtrlConnectionPoint : public IConnectionPoint {
     LONG m_ref; ControlInstance_* m_inst;
 public:
     CtrlConnectionPoint(ControlInstance_* inst) : m_ref(1), m_inst(inst) {}
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IConnectionPoint) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
-    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
-    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
-    STDMETHODIMP GetConnectionInterface(IID* p) override { *p = IID_IDispatch; return S_OK; }
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IConnectionPoint) {
+            *ppv = this; AddRef();
+            return S_OK;
+        }
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef()  override {
+        return InterlockedIncrement(&m_ref);
+    }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&m_ref);
+        if (!r) delete this;
+        return r;
+    }
+    STDMETHODIMP GetConnectionInterface(IID* p) override {
+        *p = IID_IDispatch;
+        return S_OK;
+    }
     STDMETHODIMP GetConnectionPointContainer(IConnectionPointContainer**) override { return E_NOTIMPL; }
     STDMETHODIMP Advise(IUnknown* pSink, DWORD* pCookie) override {
         if (!pSink || !pCookie) return E_POINTER;
@@ -1241,24 +1390,41 @@ public:
     STDMETHODIMP Unadvise(DWORD cookie) override {
         auto it = m_inst->sinks.find(cookie);
         if (it == m_inst->sinks.end()) return CONNECT_E_NOCONNECTION;
-        it->second->Release(); m_inst->sinks.erase(it); return S_OK;
+        it->second->Release();
+        m_inst->sinks.erase(it);
+        return S_OK;
     }
     STDMETHODIMP EnumConnections(IEnumConnections**) override { return E_NOTIMPL; }
 };
 
 inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnectionPoint** ppCP) {
     if (!ppCP) return E_POINTER;
-    if (riid == IID_IDispatch) { *ppCP = new CtrlConnectionPoint(m_inst); return S_OK; }
-    *ppCP = NULL; return CONNECT_E_NOCONNECTION;
+    if (riid == IID_IDispatch) {
+        *ppCP = new CtrlConnectionPoint(m_inst);
+        return S_OK;
+    }
+    *ppCP = NULL;
+    return CONNECT_E_NOCONNECTION;
 }
 
 class CtrlClassFactory : public IClassFactory {
     LONG m_ref; ControlReg_* m_reg;
 public:
     CtrlClassFactory(ControlReg_* r) : m_ref(1), m_reg(r) {}
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IClassFactory) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IClassFactory) {
+            *ppv = this; AddRef();
+            return S_OK;
+        }
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
     STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
-    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&m_ref);
+        if (!r) delete this;
+        return r;
+    }
     STDMETHODIMP CreateInstance(IUnknown* pOuter, REFIID riid, void** ppv) override {
         if (pOuter) return CLASS_E_NOAGGREGATION;
         ActiveXControl* c = new ActiveXControl(m_reg);
@@ -1273,15 +1439,29 @@ class SimpleDataObject : public IDataObject {
     LONG m_ref; std::wstring m_text;
 public:
     SimpleDataObject(const wchar_t* text) : m_ref(1), m_text(text) {}
-    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override { if (riid == IID_IUnknown || riid == IID_IDataObject) { *ppv = this; AddRef(); return S_OK; } *ppv = NULL; return E_NOINTERFACE; }
-    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
-    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_IDataObject) {
+            *ppv = this; AddRef();
+            return S_OK;
+        }
+        *ppv = NULL;
+        return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef()  override {
+        return InterlockedIncrement(&m_ref);
+    }
+    STDMETHODIMP_(ULONG) Release() override {
+        LONG r = InterlockedDecrement(&m_ref);
+        if (!r) delete this;
+        return r;
+    }
     STDMETHODIMP GetData(FORMATETC* pFmt, STGMEDIUM* pMed) override {
         if (pFmt->cfFormat != CF_UNICODETEXT || !(pFmt->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
         size_t bytes = (m_text.size() + 1) * sizeof(wchar_t);
         HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, bytes);
         if (!hg) return E_OUTOFMEMORY;
-        memcpy(GlobalLock(hg), m_text.c_str(), bytes); GlobalUnlock(hg);
+        memcpy(GlobalLock(hg), m_text.c_str(), bytes);
+        GlobalUnlock(hg);
         pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = NULL;
         return S_OK;
     }
@@ -1325,17 +1505,23 @@ inline void UnregisterControl(hControlClass reg) {
     delete reg;
 }
 
-inline HWND          GetControlHWND(hControl c) { return c ? c->hwnd : NULL; }
-inline void*         GetControlUserData(hControl c) { return c ? c->userData : NULL; }
-inline void          SetControlUserData(hControl c, void* d) { if (c) c->userData = d; }
-inline void          InvalidateControl(hControl c) { if (c && c->hwnd) ::InvalidateRect(c->hwnd, NULL, TRUE); }
+inline HWND GetControlHWND(hControl c) { return c ? c->hwnd : NULL; }
+inline void* GetControlUserData(hControl c) { return c ? c->userData : NULL; }
+inline void SetControlUserData(hControl c, void* d) { if (c) c->userData = d; }
+inline void InvalidateControl(hControl c) { if (c && c->hwnd) ::InvalidateRect(c->hwnd, NULL, TRUE); }
 inline hControlClass GetControlClass(hControl c) { return c ? c->reg : NULL; }
 
 inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb) {
     if (!reg) return;
     EnterCriticalSection(&reg->cs);
-    if (reg->name2id.count(name)) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("Method already bound"); }
-    if (reg->nextDispId <= 0) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("DISPID exhausted"); }
+    if (reg->name2id.count(name)) {
+        LeaveCriticalSection(&reg->cs);
+        throw std::runtime_error("Method already bound");
+    }
+    if (reg->nextDispId <= 0) {
+        LeaveCriticalSection(&reg->cs);
+        throw std::runtime_error("DISPID exhausted");
+    }
     DISPID id = reg->nextDispId--;
     reg->name2id[name] = id;
     reg->entries[id] = { DispEntry::METHOD, cb, NULL, NULL };
@@ -1359,7 +1545,10 @@ inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGe
         LeaveCriticalSection(&reg->cs);
         throw std::runtime_error("Name already bound as method");
     }
-    if (reg->nextDispId <= 0) { LeaveCriticalSection(&reg->cs); throw std::runtime_error("DISPID exhausted"); }
+    if (reg->nextDispId <= 0) {
+        LeaveCriticalSection(&reg->cs);
+        throw std::runtime_error("DISPID exhausted");
+    }
     id = reg->nextDispId--;
     reg->name2id[name] = id;
     reg->entries[id] = { DispEntry::PROPERTY, ControlMethodCallback(), getter, setter };
@@ -1369,8 +1558,14 @@ inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGe
 inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
     if (!reg) return DISPID_UNKNOWN;
     EnterCriticalSection(&reg->cs);
-    if (reg->eventName2Id.count(name)) { DISPID existing = reg->eventName2Id[name]; LeaveCriticalSection(&reg->cs); return existing; }
-    if (reg->nextEventId <= 0) { LeaveCriticalSection(&reg->cs); return DISPID_UNKNOWN; }
+    if (reg->eventName2Id.count(name)) {
+        DISPID existing = reg->eventName2Id[name];
+        LeaveCriticalSection(&reg->cs); return existing;
+    }
+    if (reg->nextEventId <= 0) {
+        LeaveCriticalSection(&reg->cs);
+        return DISPID_UNKNOWN;
+    }
     DISPID id = reg->nextEventId--;
     reg->eventName2Id[name] = id;
     LeaveCriticalSection(&reg->cs);
@@ -1379,8 +1574,12 @@ inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
 
 inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
     if (!c) return;
-    DISPPARAMS dp = {}; dp.rgvarg = args; dp.cArgs = argc;
-    for (auto& kv : c->sinks) { if (kv.second) kv.second->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL); }
+    DISPPARAMS dp = {};
+    dp.rgvarg = args;
+    dp.cArgs = argc;
+    for (auto& kv : c->sinks) {
+        if (kv.second) kv.second->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
+    }
 }
 
 inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
@@ -1398,14 +1597,21 @@ inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback on
     c->onDrop = onDrop; c->onDragEnter = onDragEnter; c->onDragOver = onDragOver; c->onDragLeave = onDragLeave;
     if (!c->dropRegistered) {
         ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
-        if (ctrl) { RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl)); c->dropRegistered = true; }
+        if (ctrl) {
+            RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl));
+            c->dropRegistered = true;
+        }
     }
 }
 
 inline void DisableDragDrop(hControl c) {
     if (!c || !c->hwnd || !c->dropRegistered) return;
-    RevokeDragDrop(c->hwnd); c->dropRegistered = false;
-    c->onDrop = NULL; c->onDragEnter = NULL; c->onDragOver = NULL; c->onDragLeave = NULL;
+    RevokeDragDrop(c->hwnd);
+    c->dropRegistered = false;
+    c->onDrop = NULL;
+    c->onDragEnter = NULL;
+    c->onDragOver = NULL;
+    c->onDragLeave = NULL;
 }
 
 inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text); }
