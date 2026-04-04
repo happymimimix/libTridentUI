@@ -1,8 +1,12 @@
 /*
-libTridentUI - v0.1.1 Alpha
+libTridentUI - v0.2.1 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by: Claude Opus 4.6 and Happy_mimimix
+
+Thread safety notice:
+All UI calls must be made from the same STA thread that called TridentInit().
+This is a COM/OLE requirement, not a library limitation.
 */
 #pragma once
 
@@ -25,6 +29,7 @@ Made possible by: Claude Opus 4.6 and Happy_mimimix
 #include <objsafe.h>
 #include <vector>
 #include <algorithm>
+#define LONG_MAX_PATH 0x0FFF
 
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
@@ -153,8 +158,8 @@ inline void DisableDragDrop(hControl c);
 inline IDataObject* CreateTextDataObject(const wchar_t* text);
 
 // COM implementations
-static const wchar_t* g_trident_wndclass = L"libTridentUI";
-static TridentWindowData_* g_trident_head = NULL;
+inline const wchar_t* g_trident_wndclass = L"libTridentUI";
+inline TridentWindowData_* g_trident_head = NULL;
 
 class ExternalDispatch : public IDispatch {
     LONG m_ref = 0;
@@ -195,17 +200,23 @@ public:
     STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
     STDMETHODIMP_(ULONG) Release() override { return InterlockedDecrement(&m_ref); }
 
-    STDMETHODIMP GetTypeInfoCount(UINT* p) override { *p = 0; return S_OK; }
+    STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
+        HRESULT hr = S_OK;
         EnterCriticalSection(&m_cs);
         for (UINT i = 0; i < cnt; i++) {
             auto it = m_name2id.find(names[i]);
-            ids[i] = (it != m_name2id.end()) ? it->second : DISPID_UNKNOWN;
+            if (it != m_name2id.end()) {
+                ids[i] = it->second;
+            } else {
+                ids[i] = DISPID_UNKNOWN;
+                hr = DISP_E_UNKNOWNNAME;
+            }
         }
         LeaveCriticalSection(&m_cs);
-        return S_OK;
+        return hr;
     }
     
     STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp,
@@ -240,6 +251,7 @@ public:
         m_bUIActivated(false), m_bInPlaceActive(false), m_bLocked(false) {}
     
     ~OleSite() {
+        Destroy();
         if (m_pUnkSite) m_pUnkSite->Release();
         if (m_pView) m_pView->Release();
         if (m_pInPlace) m_pInPlace->Release();
@@ -277,12 +289,13 @@ public:
 
         hr = m_pOle->QueryInterface(IID_IViewObjectEx, (void**)&m_pView);
         if (FAILED(hr)) hr = m_pOle->QueryInterface(IID_IViewObject2, (void**)&m_pView);
-        if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);\
+        if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
         m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
         RECT rc;
         GetClientRect(hwnd, &rc);
-        m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
+        hr = m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
+        if (FAILED(hr)) { Destroy(); return false; }
 
         IObjectWithSite* pSite = NULL;
         m_pOle->QueryInterface(IID_IObjectWithSite, (void**)&pSite);
@@ -291,9 +304,10 @@ public:
             pSite->Release();
         }
         m_pOle->QueryInterface(IID_IWebBrowser2, (void**)&m_pBrowser);
+        if (!m_pBrowser) { Destroy(); return false; }
 
         ConnectEvents(TRUE);
-        return m_pBrowser != NULL;
+        return true;
     }
     
     void Destroy() {
@@ -337,7 +351,7 @@ public:
     STDMETHODIMP_(ULONG) Release() override { LONG r = --m_ref; if (!r) delete this; return r; }
 
     STDMETHODIMP SaveObject() override { return E_NOTIMPL; }
-    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { *p = NULL; return E_NOTIMPL; }
+    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP GetContainer(IOleContainer** p) override {
         return QueryInterface(IID_IOleContainer, (void**)p);
     }
@@ -362,7 +376,7 @@ public:
         return m_pUnkSite->QueryInterface(riid, pp);
     }
 
-    STDMETHODIMP GetWindow(HWND* p) override { *p = m_hwnd; return S_OK; }
+    STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_hwnd; return S_OK; }
     STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
     STDMETHODIMP CanInPlaceActivate() override { return S_OK; }
     STDMETHODIMP OnInPlaceActivate() override {
@@ -410,6 +424,7 @@ public:
     }
     STDMETHODIMP OnInPlaceDeactivateEx(BOOL) override {
         m_bInPlaceActive = false;
+        if (m_pOle) OleLockRunning(m_pOle, FALSE, FALSE);
         if (m_pInPlace) {
             m_pInPlace->Release();
             m_pInPlace = NULL;
@@ -497,7 +512,7 @@ public:
     }
     STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { *pp = NULL; return S_OK; }
     STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { *pp = NULL; return S_OK; }
-    STDMETHODIMP GetTypeInfoCount(UINT* p) override { *p = 0; return S_OK; }
+    STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
     STDMETHODIMP Invoke(DISPID id, REFIID riid, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override {
@@ -513,8 +528,12 @@ private:
         if (FAILED(m_pBrowser->QueryInterface(IID_IConnectionPointContainer, (void**)&cpc))) return;
         IConnectionPoint* cp = NULL;
         if (SUCCEEDED(cpc->FindConnectionPoint(DIID_DWebBrowserEvents2, &cp))) {
-            if (advise) cp->Advise(static_cast<IDispatch*>(this), &m_cookie);
-            else cp->Unadvise(m_cookie);
+            if (advise) {
+                cp->Advise(static_cast<IDispatch*>(this), &m_cookie);
+            } else if (m_cookie) {
+                cp->Unadvise(m_cookie);
+                m_cookie = 0;
+            }
             cp->Release();
         }
         cpc->Release();
@@ -542,7 +561,7 @@ private:
             }
             return m_r;
         }
-        STDMETHODIMP GetWindow(HWND* p) override { *p = m_h; return S_OK; }
+        STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_h; return S_OK; }
         STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
         STDMETHODIMP GetBorder(LPRECT) override { return S_OK; }
         STDMETHODIMP RequestBorderSpace(LPCBORDERWIDTHS) override { return INPLACE_E_NOTOOLSPACE; }
@@ -573,12 +592,15 @@ private:
             }
             return m_r;
         }
-        STDMETHODIMP Next(ULONG, IUnknown** p, ULONG* f) override {                // [DUILIB-AX:88-96]
-            if (f) *f = 0;
-            if (++m_pos > 1) return S_FALSE;
-            *p = m_p; (*p)->AddRef();
-            if (f) *f = 1;
-            return S_OK;
+        STDMETHODIMP Next(ULONG celt, IUnknown** p, ULONG* f) override {
+            if (!p) return E_POINTER;
+            ULONG fetched = 0;
+            while (fetched < celt && m_pos < 1) {
+                p[fetched] = m_p; p[fetched]->AddRef();
+                fetched++; m_pos++;
+            }
+            if (f) *f = fetched;
+            return (fetched == celt) ? S_OK : S_FALSE;
         }
         STDMETHODIMP Skip(ULONG c) override { m_pos += c; return S_OK; }
         STDMETHODIMP Reset() override { m_pos = 0; return S_OK; }
@@ -607,7 +629,7 @@ struct TridentWindowData_ {
     bool alive = true;
     TridentWindowData_* next = NULL;
 };
-static LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     if (msg == WM_NCCREATE) {
@@ -627,7 +649,20 @@ static LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
             return 0;
         }
         if (msg == WM_CLOSE) {
-            CloseTridentWindow(h);
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        if (msg == WM_NCDESTROY) {
+            SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+            h->hwnd = NULL;
+            h->alive = false;
+            if (h->site) { h->site->Destroy(); delete h->site; h->site = NULL; }
+            TridentWindowData_** pp = &g_trident_head;
+            while (*pp) {
+                if (*pp == h) { *pp = h->next; break; }
+                pp = &(*pp)->next;
+            }
+            delete h;
             return 0;
         }
     }
@@ -657,16 +692,22 @@ inline void RunMessageLoop() {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         bool ate = false;
-        for (TridentWindowData_* p = g_trident_head; p; p = p->next) {
-            if (!p->alive || !p->site) continue;
-            IWebBrowser2* b = p->site->GetBrowser();
-            if (!b) continue;
-            IOleInPlaceActiveObject* ao = NULL;
-            if (SUCCEEDED(b->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ao))) {
-                ate = (ao->TranslateAccelerator(&msg) == S_OK);
-                ao->Release();
+        for (TridentWindowData_* p = g_trident_head; p; ) {
+            TridentWindowData_* next = p->next;
+            if (p->alive && p->site && (msg.hwnd == p->hwnd || IsChild(p->hwnd, msg.hwnd))) {
+                IWebBrowser2* b = p->site->GetBrowser();
+                if (b) {
+                    b->AddRef();
+                    IOleInPlaceActiveObject* ao = NULL;
+                    if (SUCCEEDED(b->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ao))) {
+                        ate = (ao->TranslateAccelerator(&msg) == S_OK);
+                        ao->Release();
+                    }
+                    b->Release();
+                }
             }
             if (ate) break;
+            p = next;
         }
         if (!ate) {
             TranslateMessage(&msg);
@@ -682,6 +723,8 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
     d->site = new OleSite();
     if (!d->site->Create(d->hwnd)) {
         delete d->site;
+        d->site = NULL;
+        SetWindowLongPtr(d->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(d->hwnd);
         delete d;
         return NULL;
@@ -694,24 +737,18 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
 
 inline void CloseTridentWindow(hTrident h) {
     if (!h || !h->alive) return;
-    h->alive = false;
-    if (h->site) {
-        h->site->Destroy();
-        delete h->site;
-        h->site = NULL;
-    }
     if (h->hwnd) {
         DestroyWindow(h->hwnd);
-        h->hwnd = NULL;
+    } else {
+        h->alive = false;
+        if (h->site) { h->site->Destroy(); delete h->site; h->site = NULL; }
+        TridentWindowData_** pp = &g_trident_head;
+        while (*pp) {
+            if (*pp == h) { *pp = h->next; break; }
+            pp = &(*pp)->next;
+        }
+        delete h;
     }
-    // Remove from chain
-    TridentWindowData_** pp = &g_trident_head;
-    while (*pp) {
-        if (*pp == h) { *pp = h->next; break; }
-        pp = &(*pp)->next;
-    }
-    delete h;
-    if (!g_trident_head) PostQuitMessage(0);
 }
 
 inline HWND GetTridentHWND(hTrident h) { return h ? h->hwnd : NULL; }
@@ -739,8 +776,8 @@ inline void NavigateTo(hTrident h, const wchar_t* url) {
 }
 
 inline void NavigateToRes(hTrident h, const wchar_t* resName) {
-    wchar_t exe[1<<10+1] = {};
-    GetModuleFileNameW(NULL, exe, 1 << 10);
+    wchar_t exe[LONG_MAX_PATH] = {};
+    GetModuleFileNameW(NULL, exe, LONG_MAX_PATH);
     std::wstring url = L"res://";
     url += exe;
     url += L"/";
@@ -751,11 +788,14 @@ inline void NavigateToRes(hTrident h, const wchar_t* resName) {
 inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     IWebBrowser2* b = GetTridentBrowser(h);
     if (!b) return;
+    b->AddRef();
+    HWND hwnd = GetTridentHWND(h);
     
     NavigateTo(h, L"about:blank");
     
     READYSTATE st;
     while (SUCCEEDED(b->get_ReadyState(&st)) && st != READYSTATE_COMPLETE) {
+        if (!h->alive || !IsWindow(hwnd)) { b->Release(); return; }
         MSG msg;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -764,11 +804,12 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
         Sleep(1);
     }
     
-    if (h->site) h->site->SetupUIHandler();
+    if (!h->alive || !h->site) { b->Release(); return; }
+    h->site->SetupUIHandler();
     
     IDispatch* d = NULL;
     b->get_Document(&d);
-    if (!d) return;
+    if (!d) { b->Release(); return; }
     
     IHTMLDocument2* doc = NULL;
     if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
@@ -784,6 +825,7 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
         doc->Release();
     }
     d->Release();
+    b->Release();
 }
 
 inline void ExecScript(hTrident h, const wchar_t* js) {
@@ -946,7 +988,7 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 }
 
 // ActiveX stuff
-static CLSID CLSIDFromName(const wchar_t* name) {
+inline CLSID CLSIDFromName(const wchar_t* name) {
     CLSID c = {};
     uint32_t h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0xfedcba98, h4 = 0x76543210;
     for (const wchar_t* p = name; *p; p++) {
@@ -996,7 +1038,7 @@ struct ControlReg_ {
     ~ControlReg_() { DeleteCriticalSection(&cs); }
 };
 
-static std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
+inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
     static std::map<CLSID, ControlReg_*, CLSIDCompare> s;
     return s;
 }
@@ -1022,7 +1064,7 @@ struct ControlInstance_ {
 };
 
 class CtrlConnectionPoint;
-static LRESULT CALLBACK CtrlWndProc(HWND, UINT, WPARAM, LPARAM);
+inline LRESULT CALLBACK CtrlWndProc(HWND, UINT, WPARAM, LPARAM);
 
 class ActiveXControl :
     public IOleObject, public IOleInPlaceObject, public IOleInPlaceActiveObject,
@@ -1076,7 +1118,7 @@ public:
     STDMETHODIMP SetHostNames(LPCOLESTR, LPCOLESTR) override { return S_OK; }
     STDMETHODIMP Close(DWORD) override { if (m_inst->active) InPlaceDeactivate(); return S_OK; }
     STDMETHODIMP SetMoniker(DWORD, IMoniker*) override { return E_NOTIMPL; }
-    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { *p = NULL; return E_NOTIMPL; }
+    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP InitFromData(IDataObject*, BOOL, DWORD) override { return E_NOTIMPL; }
     STDMETHODIMP GetClipboardData(DWORD, IDataObject**) override { return E_NOTIMPL; }
 
@@ -1124,7 +1166,6 @@ public:
                     rcPos.left, rcPos.top, rcPos.right - rcPos.left, rcPos.bottom - rcPos.top,
                     hwndC, NULL, GetModuleHandle(NULL), this);
                 m_inst->active = true;
-                ::InvalidateRect(m_inst->hwnd, NULL, TRUE);
                 if (pFrame) pFrame->Release();
                 if (pUIWin) pUIWin->Release();
             }
@@ -1178,12 +1219,15 @@ public:
     }
     STDMETHODIMP SetColorScheme(LOGPALETTE*) override { return E_NOTIMPL; }
 
-    STDMETHODIMP GetWindow(HWND* p) override { *p = m_inst->hwnd; return m_inst->hwnd ? S_OK : E_FAIL; }
+    STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_inst->hwnd; return m_inst->hwnd ? S_OK : E_FAIL; }
     STDMETHODIMP ContextSensitiveHelp(BOOL) override { return E_NOTIMPL; }
     STDMETHODIMP InPlaceDeactivate() override {
         if (!m_inst->active) return S_OK;
         UIDeactivate();
         m_inst->active = false;
+        IOleObject* pOle = NULL;
+        QueryInterface(IID_IOleObject, (void**)&pOle);
+        if (pOle) { OleLockRunning(pOle, FALSE, FALSE); pOle->Release(); }
         if (m_inst->dropRegistered) {
             RevokeDragDrop(m_inst->hwnd);
             m_inst->dropRegistered = false;
@@ -1228,6 +1272,7 @@ public:
     STDMETHODIMP EnableModeless(BOOL) override { return S_OK; }
 
     STDMETHODIMP GetControlInfo(CONTROLINFO* p) override {
+        if (!p) return E_POINTER;
         p->cb = sizeof(CONTROLINFO);
         p->hAccel = NULL;
         p->cAccel = 0;
@@ -1254,11 +1299,11 @@ public:
     STDMETHODIMP GetAdvise(DWORD*, DWORD*, IAdviseSink**) override { return E_NOTIMPL; }
     STDMETHODIMP GetExtent(DWORD, LONG, DVTARGETDEVICE*, LPSIZEL p) override { return GetExtent(DVASPECT_CONTENT, p); }
 
-    STDMETHODIMP GetClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
+    STDMETHODIMP GetClassID(CLSID* p) override { if (!p) return E_POINTER; *p = m_inst->reg->clsid; return S_OK; }
     STDMETHODIMP IsDirty() override { return S_FALSE; }
     STDMETHODIMP Load(IStream*) override { return S_OK; }
     STDMETHODIMP Save(IStream*, BOOL) override { return S_OK; }
-    STDMETHODIMP GetSizeMax(ULARGE_INTEGER* p) override { p->QuadPart = 0; return S_OK; }
+    STDMETHODIMP GetSizeMax(ULARGE_INTEGER* p) override { if (!p) return E_POINTER; p->QuadPart = 0; return S_OK; }
     STDMETHODIMP InitNew() override { return S_OK; }
 
     STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override {
@@ -1274,16 +1319,22 @@ public:
         return E_INVALIDARG;
     }
 
-    STDMETHODIMP GetTypeInfoCount(UINT* p) override { *p = 0; return S_OK; }
+    STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
+        HRESULT hr = S_OK;
         EnterCriticalSection(&m_inst->reg->cs);
         for (UINT i = 0; i < cnt; i++) {
             auto it = m_inst->reg->name2id.find(names[i]);
-            ids[i] = (it != m_inst->reg->name2id.end()) ? it->second : DISPID_UNKNOWN;
+            if (it != m_inst->reg->name2id.end()) {
+                ids[i] = it->second;
+            } else {
+                ids[i] = DISPID_UNKNOWN;
+                hr = DISP_E_UNKNOWNNAME;
+            }
         }
         LeaveCriticalSection(&m_inst->reg->cs);
-        return S_OK;
+        return hr;
     }
     STDMETHODIMP Invoke(DISPID id, REFIID riid, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
         if (riid != IID_NULL) return E_INVALIDARG;
@@ -1315,11 +1366,13 @@ public:
     STDMETHODIMP FindConnectionPoint(REFIID riid, IConnectionPoint** ppCP) override;
 
     STDMETHODIMP DragEnter(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+        if (!eff) return E_POINTER;
         if (m_inst->onDragEnter) return m_inst->onDragEnter(m_inst, pObj, keys, pt, eff);
         if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
     STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* eff) override {
+        if (!eff) return E_POINTER;
         if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
@@ -1328,6 +1381,7 @@ public:
         return S_OK;
     }
     STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+        if (!eff) return E_POINTER;
         if (m_inst->onDrop) return m_inst->onDrop(m_inst, pObj, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
@@ -1340,7 +1394,7 @@ public:
     STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 };
 
-static LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ActiveXControl* ctrl = NULL;
     if (msg == WM_NCCREATE) {
         ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams;
@@ -1349,15 +1403,21 @@ static LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     else {
         ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     }
-    if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc)
-        return ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp);
+    if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc) {
+        LRESULT r = ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp);
+        if (msg == WM_NCDESTROY) SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+        return r;
+    }
+    if (msg == WM_NCDESTROY) SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
 class CtrlConnectionPoint : public IConnectionPoint {
     LONG m_ref; ControlInstance_* m_inst;
+    IConnectionPointContainer* m_pCPC;
 public:
-    CtrlConnectionPoint(ControlInstance_* inst) : m_ref(1), m_inst(inst) {}
+    CtrlConnectionPoint(ControlInstance_* inst, IConnectionPointContainer* pCPC)
+        : m_ref(1), m_inst(inst), m_pCPC(pCPC) {}
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (riid == IID_IUnknown || riid == IID_IConnectionPoint) {
             *ppv = this; AddRef();
@@ -1378,7 +1438,12 @@ public:
         *p = IID_IDispatch;
         return S_OK;
     }
-    STDMETHODIMP GetConnectionPointContainer(IConnectionPointContainer**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetConnectionPointContainer(IConnectionPointContainer** ppCPC) override {
+        if (!ppCPC) return E_POINTER;
+        *ppCPC = m_pCPC;
+        if (*ppCPC) (*ppCPC)->AddRef();
+        return *ppCPC ? S_OK : E_UNEXPECTED;
+    }
     STDMETHODIMP Advise(IUnknown* pSink, DWORD* pCookie) override {
         if (!pSink || !pCookie) return E_POINTER;
         IDispatch* disp = NULL;
@@ -1400,7 +1465,7 @@ public:
 inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnectionPoint** ppCP) {
     if (!ppCP) return E_POINTER;
     if (riid == IID_IDispatch) {
-        *ppCP = new CtrlConnectionPoint(m_inst);
+        *ppCP = new CtrlConnectionPoint(m_inst, static_cast<IConnectionPointContainer*>(this));
         return S_OK;
     }
     *ppCP = NULL;
@@ -1438,7 +1503,7 @@ public:
 class SimpleDataObject : public IDataObject {
     LONG m_ref; std::wstring m_text;
 public:
-    SimpleDataObject(const wchar_t* text) : m_ref(1), m_text(text) {}
+    SimpleDataObject(const wchar_t* text) : m_ref(1), m_text(text ? text : L"") {}
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (riid == IID_IUnknown || riid == IID_IDataObject) {
             *ppv = this; AddRef();
@@ -1456,11 +1521,14 @@ public:
         return r;
     }
     STDMETHODIMP GetData(FORMATETC* pFmt, STGMEDIUM* pMed) override {
+        if (!pFmt || !pMed) return E_POINTER;
         if (pFmt->cfFormat != CF_UNICODETEXT || !(pFmt->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
         size_t bytes = (m_text.size() + 1) * sizeof(wchar_t);
         HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, bytes);
         if (!hg) return E_OUTOFMEMORY;
-        memcpy(GlobalLock(hg), m_text.c_str(), bytes);
+        void* dst = GlobalLock(hg);
+        if (!dst) { GlobalFree(hg); return E_OUTOFMEMORY; }
+        memcpy(dst, m_text.c_str(), bytes);
         GlobalUnlock(hg);
         pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = NULL;
         return S_OK;
@@ -1482,13 +1550,15 @@ inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSI
 
 inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
     if (!name || !proc) return NULL;
+    CLSID clsid = CLSIDFromName(name);
+    if (CtrlRegistry().find(clsid) != CtrlRegistry().end()) return NULL;  // 重复注册
     auto* reg = new ControlReg_();
     reg->name = name;
     reg->wndProc = proc;
     reg->defaultUserData = userData;
     reg->extraStyle = style;
     reg->wndClassName = std::wstring(L"TridentControl_") + name;
-    reg->clsid = CLSIDFromName(name);
+    reg->clsid = clsid;
     auto* factory = new CtrlClassFactory(reg);
     HRESULT hr = CoRegisterClassObject(reg->clsid, factory, CLSCTX_INPROC_SERVER, REGCLS_MULTIPLEUSE, &reg->comCookie);
     factory->Release();
@@ -1577,8 +1647,14 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
     DISPPARAMS dp = {};
     dp.rgvarg = args;
     dp.cArgs = argc;
+    std::vector<IDispatch*> snapshot;
+    snapshot.reserve(c->sinks.size());
     for (auto& kv : c->sinks) {
-        if (kv.second) kv.second->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
+        if (kv.second) { kv.second->AddRef(); snapshot.push_back(kv.second); }
+    }
+    for (IDispatch* sink : snapshot) {
+        sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
+        sink->Release();
     }
 }
 
@@ -1598,8 +1674,9 @@ inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback on
     if (!c->dropRegistered) {
         ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
         if (ctrl) {
-            RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl));
-            c->dropRegistered = true;
+            HRESULT hr = RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl));
+            if (SUCCEEDED(hr) || hr == DRAGDROP_E_ALREADYREGISTERED)
+                c->dropRegistered = true;
         }
     }
 }
@@ -1614,4 +1691,4 @@ inline void DisableDragDrop(hControl c) {
     c->onDragLeave = NULL;
 }
 
-inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text); }
+inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text ? text : L""); }
