@@ -347,8 +347,8 @@ public:
         if (*ppv) { AddRef(); return S_OK; }
         return E_NOINTERFACE;
     }
-    STDMETHODIMP_(ULONG) AddRef()  override { return ++m_ref; }
-    STDMETHODIMP_(ULONG) Release() override { LONG r = --m_ref; if (!r) delete this; return r; }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
     STDMETHODIMP SaveObject() override { return E_NOTIMPL; }
     STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
@@ -385,7 +385,7 @@ public:
     }
     STDMETHODIMP OnUIActivate() override { m_bUIActivated = true; return S_OK; }
     STDMETHODIMP GetWindowContext(IOleInPlaceFrame** ppFrame, IOleInPlaceUIWindow** ppDoc, LPRECT pPos, LPRECT pClip, LPOLEINPLACEFRAMEINFO pFI) override {
-        if (!ppFrame || !ppDoc || !pPos || !pClip) return E_POINTER;
+        if (!ppFrame || !ppDoc || !pPos || !pClip || !pFI) return E_POINTER;
         *ppFrame = new InlineFrame(m_hwnd);
         *ppDoc = NULL;
         GetClientRect(m_hwnd, pPos);
@@ -553,14 +553,8 @@ private:
             *ppv = NULL;
             return E_NOINTERFACE;
         }
-        STDMETHODIMP_(ULONG) AddRef()  override { return ++m_r; }
-        STDMETHODIMP_(ULONG) Release() override {
-            if (--m_r == 0) {
-                delete this;
-                return 0;
-            }
-            return m_r;
-        }
+        STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_r); }
+        STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_r); if (!r) delete this; return r; }
         STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_h; return S_OK; }
         STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
         STDMETHODIMP GetBorder(LPRECT) override { return S_OK; }
@@ -584,14 +578,8 @@ private:
                 { *ppv = static_cast<IEnumUnknown*>(this); AddRef(); return S_OK; }
             *ppv = NULL; return E_NOINTERFACE;
         }
-        STDMETHODIMP_(ULONG) AddRef()  override { return ++m_r; }
-        STDMETHODIMP_(ULONG) Release() override {
-            if (--m_r == 0) {
-                delete this;
-                return 0;
-            }
-            return m_r;
-        }
+        STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_r); }
+        STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_r); if (!r) delete this; return r; }
         STDMETHODIMP Next(ULONG celt, IUnknown** p, ULONG* f) override {
             if (!p) return E_POINTER;
             ULONG fetched = 0;
@@ -656,7 +644,8 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
             SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
             h->hwnd = NULL;
             h->alive = false;
-            if (h->site) { h->site->Destroy(); delete h->site; h->site = NULL; }
+            if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
+            // Remove from chain
             TridentWindowData_** pp = &g_trident_head;
             while (*pp) {
                 if (*pp == h) { *pp = h->next; break; }
@@ -694,7 +683,8 @@ inline void RunMessageLoop() {
         bool ate = false;
         for (TridentWindowData_* p = g_trident_head; p; ) {
             TridentWindowData_* next = p->next;
-            if (p->alive && p->site && (msg.hwnd == p->hwnd || IsChild(p->hwnd, msg.hwnd))) {
+            if (p->alive && p->site && p->hwnd &&
+                (msg.hwnd == p->hwnd || IsChild(p->hwnd, msg.hwnd))) {
                 IWebBrowser2* b = p->site->GetBrowser();
                 if (b) {
                     b->AddRef();
@@ -722,8 +712,7 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
     if (!d->hwnd) { delete d; return NULL; }
     d->site = new OleSite();
     if (!d->site->Create(d->hwnd)) {
-        delete d->site;
-        d->site = NULL;
+        d->site->Release(); d->site = NULL;
         SetWindowLongPtr(d->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(d->hwnd);
         delete d;
@@ -740,8 +729,9 @@ inline void CloseTridentWindow(hTrident h) {
     if (h->hwnd) {
         DestroyWindow(h->hwnd);
     } else {
+        // This shouldn't happen normally but we still handle it here anyways.
         h->alive = false;
-        if (h->site) { h->site->Destroy(); delete h->site; h->site = NULL; }
+        if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
         TridentWindowData_** pp = &g_trident_head;
         while (*pp) {
             if (*pp == h) { *pp = h->next; break; }
@@ -795,17 +785,19 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     
     READYSTATE st;
     while (SUCCEEDED(b->get_ReadyState(&st)) && st != READYSTATE_COMPLETE) {
-        if (!h->alive || !IsWindow(hwnd)) { b->Release(); return; }
+        if (!IsWindow(hwnd)) { b->Release(); return; }
         MSG msg;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-        Sleep(1);
+        _mm_pause();
     }
     
-    if (!h->alive || !h->site) { b->Release(); return; }
-    h->site->SetupUIHandler();
+    // Get h again after the message loop
+    h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!h || !IsWindow(hwnd)) { b->Release(); return; }
+    if (h->site) h->site->SetupUIHandler();
     
     IDispatch* d = NULL;
     b->get_Document(&d);
@@ -1014,12 +1006,13 @@ struct CLSIDCompare {
 
 struct DispEntry {
     enum Type { METHOD, PROPERTY } type;
-    ControlMethodCallback method;   // [MERGE: 改为ControlMethodCallback]
+    ControlMethodCallback method;
     PropertyGetter getter;
     PropertySetter setter;
 };
 
 struct ControlReg_ {
+    LONG refCount = 1;
     std::wstring name;
     ControlWndProc wndProc;
     void* defaultUserData;
@@ -1035,7 +1028,12 @@ struct ControlReg_ {
     DISPID nextEventId = INT32_MAX;
     std::map<std::wstring, DISPID> eventName2Id;
     ControlReg_() { InitializeCriticalSection(&cs); }
-    ~ControlReg_() { DeleteCriticalSection(&cs); }
+    ~ControlReg_() {
+        if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(NULL));
+        DeleteCriticalSection(&cs);
+    }
+    void AddRef()  { InterlockedIncrement(&refCount); }
+    void Release() { if (InterlockedDecrement(&refCount) == 0) delete this; }
 };
 
 inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
@@ -1079,6 +1077,7 @@ public:
     ActiveXControl(ControlReg_* reg) : m_ref(1) {
         m_inst = new ControlInstance_();
         m_inst->reg = reg;
+        reg->AddRef();
         m_inst->userData = reg->defaultUserData;
         memset(&m_inst->rcPos, 0, sizeof(RECT));
     }
@@ -1087,7 +1086,9 @@ public:
         if (m_inst->clientSite) m_inst->clientSite->Release();
         if (m_inst->adviseHolder) m_inst->adviseHolder->Release();
         if (m_inst->inPlaceSite) m_inst->inPlaceSite->Release();
+        ControlReg_* reg = m_inst->reg;
         delete m_inst;
+        if (reg) reg->Release();
     }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
@@ -1258,14 +1259,7 @@ public:
     }
     STDMETHODIMP ReactivateAndUndo() override { return E_NOTIMPL; }
 
-    STDMETHODIMP TranslateAccelerator(LPMSG msg) override {
-        if (m_inst->hwnd && msg) {
-            ::TranslateMessage(msg);
-            ::DispatchMessage(msg);
-            return S_OK;
-        }
-        return S_FALSE;
-    }
+    STDMETHODIMP TranslateAccelerator(LPMSG) override { return S_FALSE; }
     STDMETHODIMP OnFrameWindowActivate(BOOL) override { return S_OK; }
     STDMETHODIMP OnDocWindowActivate(BOOL) override { return S_OK; }
     STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return S_OK; }
@@ -1349,7 +1343,7 @@ public:
         if ((wf & DISPATCH_METHOD) && entry.type == DispEntry::METHOD) {
             DispArgs args = { dp };
             if (res) VariantInit(res);
-            return entry.method(m_inst, args, res);  // [MERGE: 传hControl]
+            return entry.method(m_inst, args, res);
         }
         if ((wf & DISPATCH_PROPERTYGET) && entry.type == DispEntry::PROPERTY && entry.getter) {
             if (res) VariantInit(res);
@@ -1417,7 +1411,8 @@ class CtrlConnectionPoint : public IConnectionPoint {
     IConnectionPointContainer* m_pCPC;
 public:
     CtrlConnectionPoint(ControlInstance_* inst, IConnectionPointContainer* pCPC)
-        : m_ref(1), m_inst(inst), m_pCPC(pCPC) {}
+        : m_ref(1), m_inst(inst), m_pCPC(pCPC) { if (m_pCPC) m_pCPC->AddRef(); }
+    ~CtrlConnectionPoint() { if (m_pCPC) m_pCPC->Release(); }
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (riid == IID_IUnknown || riid == IID_IConnectionPoint) {
             *ppv = this; AddRef();
@@ -1534,8 +1529,8 @@ public:
         return S_OK;
     }
     STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
-    STDMETHODIMP QueryGetData(FORMATETC* p) override { return (p->cfFormat == CF_UNICODETEXT && (p->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC; }
-    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { p->ptd = NULL; return DATA_S_SAMEFORMATETC; }
+    STDMETHODIMP QueryGetData(FORMATETC* p) override { if (!p) return E_POINTER; return (p->cfFormat == CF_UNICODETEXT && (p->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC; }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { if (!p) return E_POINTER; p->ptd = NULL; return DATA_S_SAMEFORMATETC; }
     STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
     STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
     STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
@@ -1551,7 +1546,7 @@ inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSI
 inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
     if (!name || !proc) return NULL;
     CLSID clsid = CLSIDFromName(name);
-    if (CtrlRegistry().find(clsid) != CtrlRegistry().end()) return NULL;  // 重复注册
+    if (CtrlRegistry().find(clsid) != CtrlRegistry().end()) return NULL;
     auto* reg = new ControlReg_();
     reg->name = name;
     reg->wndProc = proc;
@@ -1570,9 +1565,8 @@ inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, v
 inline void UnregisterControl(hControlClass reg) {
     if (!reg) return;
     CoRevokeClassObject(reg->comCookie);
-    if (reg->wndAtom) UnregisterClassW(reg->wndClassName.c_str(), GetModuleHandle(NULL));
     CtrlRegistry().erase(reg->clsid);
-    delete reg;
+    reg->Release();
 }
 
 inline HWND GetControlHWND(hControl c) { return c ? c->hwnd : NULL; }
@@ -1643,10 +1637,16 @@ inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
 }
 
 inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
-    if (!c) return;
+    if (!c || argc < 0) return;
+    if (argc > 0 && !args) return;
+    // Invert parameter order (COM needs this!)
+    VARIANT* reversed = nullptr;
+    reversed = new VARIANT[argc];
+    for (int i = 0; i < argc; i++) reversed[i] = args[argc - 1 - i];
     DISPPARAMS dp = {};
-    dp.rgvarg = args;
+    dp.rgvarg = reversed;
     dp.cArgs = argc;
+    // Make a snapshot to ensure thread safty
     std::vector<IDispatch*> snapshot;
     snapshot.reserve(c->sinks.size());
     for (auto& kv : c->sinks) {
@@ -1656,6 +1656,7 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
         sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
         sink->Release();
     }
+    delete[] reversed;
 }
 
 inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
