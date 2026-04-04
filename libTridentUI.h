@@ -126,7 +126,7 @@ inline void TridentInit();
 inline void TridentShutdown();
 inline void RunMessageLoop();
 
-inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = nullptr, DWORD style = WS_OVERLAPPEDWINDOW);
+inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW);
 inline void CloseTridentWindow(hTrident h);
 inline HWND GetTridentHWND(hTrident h);
 inline IWebBrowser2* GetTridentBrowser(hTrident h);
@@ -161,7 +161,7 @@ inline void SetWndProc(hTrident h, TridentWndProc proc);
 inline void SetUserData(hTrident h, void* data);
 inline void* GetUserData(hTrident h);
 
-inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = nullptr, DWORD style = 0);
+inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = NULL, DWORD style = 0);
 inline void UnregisterControl(hControlClass reg);
 inline CLSID GetControlCLSID(hControlClass reg);
 inline std::wstring CLSIDToString(const CLSID& clsid);
@@ -169,20 +169,20 @@ inline std::wstring GetControlClassId(hControlClass reg);
 inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
 inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
 inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name);
-inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = nullptr, int argc = 0);
-inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = nullptr, int argc = 0);
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL, int argc = 0);
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL, int argc = 0);
 inline HWND GetControlHWND(hControl c);
 inline void* GetControlUserData(hControl c);
 inline void SetControlUserData(hControl c, void* data);
 inline void InvalidateControl(hControl c);
 inline hControlClass GetControlClass(hControl c);
-inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = nullptr, DropOverCallback onDragOver = nullptr, DropLeaveCallback onDragLeave = nullptr);
+inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
 inline void DisableDragDrop(hControl c);
 inline IDataObject* CreateTextDataObject(const wchar_t* text);
 
 // COM implementations
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
-inline TridentWindowData_* g_trident_head = nullptr;
+inline TridentWindowData_* g_trident_head = NULL;
 
 // ExternalDispatch — this is what JavaScript sees as "window.external"
 //
@@ -233,7 +233,7 @@ public:
             AddRef();
             return S_OK;
         }
-        *ppv = nullptr;
+        *ppv = NULL;
         return E_NOINTERFACE;
     }
     STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
@@ -324,8 +324,8 @@ class OleSite :
 public:
     ExternalDispatch ext;
     
-    OleSite() : m_ref(1), m_hwnd(nullptr), m_pUnkSite(nullptr),
-        m_pView(nullptr), m_pInPlace(nullptr), m_pOle(nullptr), m_pBrowser(nullptr),
+    OleSite() : m_ref(1), m_hwnd(NULL), m_pUnkSite(NULL),
+        m_pView(NULL), m_pInPlace(NULL), m_pOle(NULL), m_pBrowser(NULL),
         m_cookie(0), m_bWindowless(true), m_bFocused(false), m_bCaptured(false),
         m_bUIActivated(false), m_bInPlaceActive(false), m_bLocked(false) {}
     
@@ -344,10 +344,10 @@ public:
     // in a different UI handler for this document".
     void SetupUIHandler() {
         if (!m_pBrowser) return;
-        IDispatch* d = nullptr;
+        IDispatch* d = NULL;
         m_pBrowser->get_Document(&d);
         if (!d) return;
-        ICustomDoc* cd = nullptr;
+        ICustomDoc* cd = NULL;
         if (SUCCEEDED(d->QueryInterface(IID_ICustomDoc, (void**)&cd))) {
             cd->SetUIHandler(static_cast<IDocHostUIHandler*>(this));
             cd->Release();
@@ -363,7 +363,7 @@ public:
         // Step 1: Create the WebBrowser COM object. This is the IE engine itself.
         // CLSID_WebBrowser is {8856F961-340A-11D0-A96B-00C04FD705A2} — it lives in
         // ieframe.dll and has been there since IE3.
-        HRESULT hr = CoCreateInstance(CLSID_WebBrowser, nullptr, CLSCTX_ALL, IID_IOleObject, (void**)&m_pOle);
+        HRESULT hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_ALL, IID_IOleObject, (void**)&m_pOle);
         if (FAILED(hr)) return false;
 
         // Step 2: Tell IE "I'm your host". This lets IE call back into us for
@@ -372,7 +372,7 @@ public:
 
         // Step 3: Initialize IE's persistent state from scratch (empty, no saved data).
         // Without this, IE might try to load from a stream that doesn't exist.
-        IPersistStreamInit* psi = nullptr;
+        IPersistStreamInit* psi = NULL;
         m_pOle->QueryInterface(IID_IPersistStreamInit, (void**)&psi);
         if (psi) {
             psi->InitNew();
@@ -385,19 +385,19 @@ public:
         hr = m_pOle->QueryInterface(IID_IViewObjectEx, (void**)&m_pView);
         if (FAILED(hr)) hr = m_pOle->QueryInterface(IID_IViewObject2, (void**)&m_pView);
         if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
-        m_pOle->SetHostNames(OLESTR("TridentUI"), nullptr);
+        m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
         // Step 5: Activate IE "in place" — this makes it create its child windows inside
         // our HWND and start rendering. OLEIVERB_INPLACEACTIVATE is the command that says
         // "go live inside this rectangle".
         RECT rc;
         GetClientRect(hwnd, &rc);
-        hr = m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, nullptr, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
+        hr = m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
         if (FAILED(hr)) { Destroy(); return false; }
 
         // Step 6: Establish a bidirectional site link. Some COM objects use IObjectWithSite
         // as an alternative to IOleClientSite for the "who's my parent?" question.
-        IObjectWithSite* pSite = nullptr;
+        IObjectWithSite* pSite = NULL;
         m_pOle->QueryInterface(IID_IObjectWithSite, (void**)&pSite);
         if (pSite) {
             pSite->SetSite(static_cast<IOleClientSite*>(this));
@@ -418,19 +418,19 @@ public:
     // Destroy — disconnects everything and releases COM references.
     // This must be called before the host window is destroyed, because IE's child windows
     // are parented to our HWND. Calling Close(OLECLOSE_NOSAVE) tells IE to deactivate
-    // and tear down its UI. SetClientSite(nullptr) breaks the back-pointer so IE won't
+    // and tear down its UI. SetClientSite(NULL) breaks the back-pointer so IE won't
     // try to call us after we're gone.
     void Destroy() {
         ConnectEvents(FALSE);
-        if (m_pBrowser) { m_pBrowser->Release(); m_pBrowser = nullptr; }
+        if (m_pBrowser) { m_pBrowser->Release(); m_pBrowser = NULL; }
         if (m_pOle) {
-            IObjectWithSite* pSite = nullptr;
+            IObjectWithSite* pSite = NULL;
             m_pOle->QueryInterface(IID_IObjectWithSite, (void**)&pSite);
-            if (pSite) { pSite->SetSite(nullptr); pSite->Release(); }
+            if (pSite) { pSite->SetSite(NULL); pSite->Release(); }
             m_pOle->Close(OLECLOSE_NOSAVE);
-            m_pOle->SetClientSite(nullptr);
+            m_pOle->SetClientSite(NULL);
             m_pOle->Release();
-            m_pOle = nullptr;
+            m_pOle = NULL;
         }
     }
 
@@ -445,7 +445,7 @@ public:
     // IE calls this constantly during initialization to discover what we can do.
     // Each interface we return tells IE about a different capability we offer.
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
-        *ppv = nullptr;
+        *ppv = NULL;
         if (riid == IID_IUnknown) *ppv = static_cast<IOleWindow*>(this);
         else if (riid == IID_IOleClientSite) *ppv = static_cast<IOleClientSite*>(this);
         else if (riid == IID_IOleInPlaceSiteWindowless) *ppv = static_cast<IOleInPlaceSiteWindowless*>(this);
@@ -468,7 +468,7 @@ public:
     // Most are stubs because we're a simple host — we don't save documents,
     // don't support monikers (persistent object names), etc.
     STDMETHODIMP SaveObject() override { return E_NOTIMPL; }
-    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = nullptr; return E_NOTIMPL; }
+    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP GetContainer(IOleContainer** p) override {
         return QueryInterface(IID_IOleContainer, (void**)p);
     }
@@ -477,7 +477,7 @@ public:
         if (!m_hwnd || !m_pView) return E_FAIL;
         HDC hDC = ::GetDC(m_hwnd);
         RECT rc; GetClientRect(m_hwnd, &rc);
-        m_pView->Draw(DVASPECT_CONTENT, -1, nullptr, nullptr, nullptr, hDC, (RECTL*)&rc, (RECTL*)&rc, nullptr, nullptr);
+        m_pView->Draw(DVASPECT_CONTENT, -1, NULL, NULL, NULL, hDC, (RECTL*)&rc, (RECTL*)&rc, NULL, NULL);
         ::ReleaseDC(m_hwnd, hDC);
         return S_OK;
     }
@@ -493,7 +493,7 @@ public:
         return S_OK;
     }
     STDMETHODIMP GetSite(REFIID riid, void** pp) override {
-        if (!m_pUnkSite) { *pp = nullptr; return E_FAIL; }
+        if (!m_pUnkSite) { *pp = NULL; return E_FAIL; }
         return m_pUnkSite->QueryInterface(riid, pp);
     }
 
@@ -514,13 +514,13 @@ public:
     STDMETHODIMP GetWindowContext(IOleInPlaceFrame** ppFrame, IOleInPlaceUIWindow** ppDoc, LPRECT pPos, LPRECT pClip, LPOLEINPLACEFRAMEINFO pFI) override {
         if (!ppFrame || !ppDoc || !pPos || !pClip || !pFI) return E_POINTER;
         *ppFrame = new InlineFrame(m_hwnd);
-        *ppDoc = nullptr; // No separate UI window (we're not an MDI app)
+        *ppDoc = NULL; // No separate UI window (we're not an MDI app)
         GetClientRect(m_hwnd, pPos);
         *pClip = *pPos; // Clipping rect = position rect (no clipping)
         pFI->cb = sizeof(OLEINPLACEFRAMEINFO);
         pFI->fMDIApp = FALSE;
         pFI->hwndFrame = m_hwnd;
-        pFI->haccel = nullptr; // No accelerator table
+        pFI->haccel = NULL; // No accelerator table
         pFI->cAccelEntries = 0;
         return S_OK;
     }
@@ -559,7 +559,7 @@ public:
         if (m_pOle) OleLockRunning(m_pOle, FALSE, FALSE);
         if (m_pInPlace) {
             m_pInPlace->Release();
-            m_pInPlace = nullptr;
+            m_pInPlace = NULL;
         }
         return S_OK;
     }
@@ -657,8 +657,8 @@ public:
         ext.AddRef();
         return S_OK;
     }
-    STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { *pp = nullptr; return S_OK; }
-    STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { *pp = nullptr; return S_OK; }
+    STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { *pp = NULL; return S_OK; }
+    STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { *pp = NULL; return S_OK; }
 
     // ---- IDispatch (for browser events) ----
     // We subscribe to DWebBrowserEvents2 to know when navigation completes.
@@ -681,9 +681,9 @@ private:
     // We connect to DWebBrowserEvents2 to catch DISPID_DOCUMENTCOMPLETE.
     void ConnectEvents(BOOL advise) {
         if (!m_pBrowser) return;
-        IConnectionPointContainer* cpc = nullptr;
+        IConnectionPointContainer* cpc = NULL;
         if (FAILED(m_pBrowser->QueryInterface(IID_IConnectionPointContainer, (void**)&cpc))) return;
-        IConnectionPoint* cp = nullptr;
+        IConnectionPoint* cp = NULL;
         if (SUCCEEDED(cpc->FindConnectionPoint(DIID_DWebBrowserEvents2, &cp))) {
             if (advise) {
                 cp->Advise(static_cast<IDispatch*>(this), &m_cookie);
@@ -707,7 +707,7 @@ private:
                 AddRef();
                 return S_OK;
             }
-            *ppv = nullptr;
+            *ppv = NULL;
             return E_NOINTERFACE;
         }
         STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_r); }
@@ -733,7 +733,7 @@ private:
         STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
             if (riid == IID_IUnknown || riid == IID_IEnumUnknown)
                 { *ppv = static_cast<IEnumUnknown*>(this); AddRef(); return S_OK; }
-            *ppv = nullptr; return E_NOINTERFACE;
+            *ppv = NULL; return E_NOINTERFACE;
         }
         STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_r); }
         STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_r); if (!r) delete this; return r; }
@@ -772,10 +772,10 @@ private:
 // This is a node in a doubly-linked list (g_trident_head). Each node owns
 // an OleSite (the COM hosting layer) and optionally a user WndProc and user data.
 struct TridentWindowData_ {
-    HWND hwnd = nullptr; // The Win32 window
-    OleSite* site = nullptr; // The COM hosting layer (Release'd, not deleted)
-    TridentWndProc userProc = nullptr; // User's custom WndProc (optional)
-    void* userData = nullptr; // User's custom data (optional)
+    HWND hwnd = NULL; // The Win32 window
+    OleSite* site = NULL; // The COM hosting layer (Release'd, not deleted)
+    TridentWndProc userProc = NULL; // User's custom WndProc (optional)
+    void* userData = NULL; // User's custom data (optional)
     bool alive = true; // False after WM_NCDESTROY
     TridentWindowData_* prev = nullptr; // Previous node in the linked list
     TridentWindowData_* next = nullptr; // Next node in the linked list
@@ -823,9 +823,9 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
         }
         if (msg == WM_NCDESTROY) {
             SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
-            h->hwnd = nullptr;
+            h->hwnd = NULL;
             h->alive = false;
-            if (h->site) { h->site->Destroy(); h->site->Release(); h->site = nullptr; }
+            if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
             // Remove from doubly-linked list (O(1))
             if (h->prev) h->prev->next = h->next;
             else g_trident_head = h->next;
@@ -840,11 +840,11 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
 
 // Public API implementations
 inline void TridentInit() {
-    OleInitialize(nullptr);
+    OleInitialize(NULL);
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = TridentHostWndProc;
-    wc.hInstance = GetModuleHandle(nullptr);
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hInstance = GetModuleHandle(NULL);
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.lpszClassName = g_trident_wndclass;
     RegisterClassExW(&wc);
@@ -852,7 +852,7 @@ inline void TridentInit() {
 
 inline void TridentShutdown() {
     while (g_trident_head) CloseTridentWindow(g_trident_head);
-    UnregisterClassW(g_trident_wndclass, GetModuleHandle(nullptr));
+    UnregisterClassW(g_trident_wndclass, GetModuleHandle(NULL));
     OleUninitialize();
 }
 
@@ -864,7 +864,7 @@ inline void TridentShutdown() {
 // a background window could steal keys from the foreground window.
 inline void RunMessageLoop() {
     MSG msg;
-    while (GetMessage(&msg, nullptr, 0, 0)) {
+    while (GetMessage(&msg, NULL, 0, 0)) {
         bool ate = false;
         for (TridentWindowData_* p = g_trident_head; p; ) {
             TridentWindowData_* next = p->next;
@@ -873,7 +873,7 @@ inline void RunMessageLoop() {
                 IWebBrowser2* b = p->site->GetBrowser();
                 if (b) {
                     b->AddRef();
-                    IOleInPlaceActiveObject* ao = nullptr;
+                    IOleInPlaceActiveObject* ao = NULL;
                     if (SUCCEEDED(b->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ao))) {
                         ate = (ao->TranslateAccelerator(&msg) == S_OK);
                         ao->Release();
@@ -893,18 +893,18 @@ inline void RunMessageLoop() {
 
 inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner, DWORD style) {
     TridentWindowData_* d = new TridentWindowData_();
-    CreateWindowExW(0, g_trident_wndclass, title, style, x, y, w, h, owner, nullptr, GetModuleHandle(nullptr), d);
-    if (!d->hwnd) { delete d; return nullptr; }
+    CreateWindowExW(0, g_trident_wndclass, title, style, x, y, w, h, owner, NULL, GetModuleHandle(NULL), d);
+    if (!d->hwnd) { delete d; return NULL; }
     d->site = new OleSite();
     if (!d->site->Create(d->hwnd)) {
-        d->site->Release(); d->site = nullptr;
+        d->site->Release(); d->site = NULL;
         SetWindowLongPtr(d->hwnd, GWLP_USERDATA, 0);
         DestroyWindow(d->hwnd);
         delete d;
-        return nullptr;
+        return NULL;
     }
     // Insert at head of doubly-linked list
-    d->prev = nullptr;
+    d->prev = NULL;
     d->next = g_trident_head;
     if (g_trident_head) g_trident_head->prev = d;
     g_trident_head = d;
@@ -918,7 +918,7 @@ inline void CloseTridentWindow(hTrident h) {
     } else {
         // This shouldn't happen normally but we still handle it here anyways.
         h->alive = false;
-        if (h->site) { h->site->Destroy(); h->site->Release(); h->site = nullptr; }
+        if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
         if (h->prev) h->prev->next = h->next;
         else g_trident_head = h->next;
         if (h->next) h->next->prev = h->prev;
@@ -926,10 +926,10 @@ inline void CloseTridentWindow(hTrident h) {
     }
 }
 
-inline HWND GetTridentHWND(hTrident h) { return h ? h->hwnd : nullptr; }
+inline HWND GetTridentHWND(hTrident h) { return h ? h->hwnd : NULL; }
 
 inline IWebBrowser2* GetTridentBrowser(hTrident h) {
-    return (h && h->site) ? h->site->GetBrowser() : nullptr;
+    return (h && h->site) ? h->site->GetBrowser() : NULL;
 }
 
 inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb) {
@@ -938,7 +938,7 @@ inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb) {
 
 inline void SetWndProc(hTrident h, TridentWndProc proc) { if (h) h->userProc = proc; }
 inline void SetUserData(hTrident h, void* data) { if (h) h->userData = data; }
-inline void* GetUserData(hTrident h) { return h ? h->userData : nullptr; }
+inline void* GetUserData(hTrident h) { return h ? h->userData : NULL; }
 
 inline void NavigateTo(hTrident h, const wchar_t* url) {
     IWebBrowser2* b = GetTridentBrowser(h);
@@ -946,13 +946,13 @@ inline void NavigateTo(hTrident h, const wchar_t* url) {
     VARIANT v;
     v.vt = VT_BSTR;
     v.bstrVal = SysAllocString(url);
-    b->Navigate2(&v, nullptr, nullptr, nullptr, nullptr);
+    b->Navigate2(&v, NULL, NULL, NULL, NULL);
     SysFreeString(v.bstrVal);
 }
 
 inline void NavigateToRes(hTrident h, const wchar_t* resName) {
     wchar_t exe[LONG_MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, LONG_MAX_PATH);
+    GetModuleFileNameW(NULL, exe, LONG_MAX_PATH);
     std::wstring url = L"res://";
     url += exe;
     url += L"/";
@@ -991,7 +991,7 @@ inline void NavigateToRes(hTrident h, const wchar_t* resName) {
 //   - We AddRef the browser (so it doesn't get freed under us)
 //   - We save hwnd on the stack (so we can call IsWindow without touching h)
 //   - After the pump, we re-fetch h from GWLP_USERDATA (which WM_NCDESTROY clears to 0)
-//   - If h is nullptr, the window was destroyed during the pump, so we bail
+//   - If h is NULL, the window was destroyed during the pump, so we bail
 inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     IWebBrowser2* b = GetTridentBrowser(h);
     if (!b) return;
@@ -1006,7 +1006,7 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     while (SUCCEEDED(b->get_ReadyState(&st)) && st != READYSTATE_COMPLETE) {
         if (!IsWindow(hwnd)) { b->Release(); return; } // window destroyed during pump
         MSG msg;
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
@@ -1020,11 +1020,11 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     
     // Now write the HTML into the blank document using document.write().
     // This is the same as doing document.write() from JavaScript.
-    IDispatch* d = nullptr;
+    IDispatch* d = NULL;
     b->get_Document(&d);
     if (!d) { b->Release(); return; }
     
-    IHTMLDocument2* doc = nullptr;
+    IHTMLDocument2* doc = NULL;
     if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
         // document.write() expects a SAFEARRAY of VARIANTs containing BSTRs.
         // Yeah, it's a lot of boilerplate for what's essentially one function call.
@@ -1047,13 +1047,13 @@ inline void ExecScript(hTrident h, const wchar_t* js) {
     IWebBrowser2* b = GetTridentBrowser(h);
     if (!b) return;
     
-    IDispatch* d = nullptr;
+    IDispatch* d = NULL;
     b->get_Document(&d);
     if (!d) return;
     
-    IHTMLDocument2* doc = nullptr;
+    IHTMLDocument2* doc = NULL;
     if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
-        IHTMLWindow2* w = nullptr;
+        IHTMLWindow2* w = NULL;
         if (SUCCEEDED(doc->get_parentWindow(&w))) {
             VARIANT r;
             VariantInit(&r);
@@ -1072,14 +1072,14 @@ inline void ExecScript(hTrident h, const wchar_t* js) {
 
 inline hElement GetElement(hTrident h, const wchar_t* id) {
     IWebBrowser2* b = GetTridentBrowser(h);
-    if (!b) return nullptr;
+    if (!b) return NULL;
     
-    IDispatch* d = nullptr;
+    IDispatch* d = NULL;
     b->get_Document(&d);
-    if (!d) return nullptr;
+    if (!d) return NULL;
     
-    IHTMLElement* elem = nullptr;
-    IHTMLDocument3* doc3 = nullptr;
+    IHTMLElement* elem = NULL;
+    IHTMLDocument3* doc3 = NULL;
     if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument3, (void**)&doc3))) {
         BSTR bstrId = SysAllocString(id);
         doc3->getElementById(bstrId, &elem);
@@ -1103,7 +1103,7 @@ inline void SetHTML(hElement e, const wchar_t* html) {
 
 inline std::wstring GetHTML(hElement e) {
     if (!e) return L"";
-    BSTR bstr = nullptr;
+    BSTR bstr = NULL;
     e->get_innerHTML(&bstr);
     std::wstring result = bstr ? bstr : L"";
     SysFreeString(bstr);
@@ -1119,7 +1119,7 @@ inline void SetText(hElement e, const wchar_t* text) {
 
 inline std::wstring GetText(hElement e) {
     if (!e) return L"";
-    BSTR bstr = nullptr;
+    BSTR bstr = NULL;
     e->get_innerText(&bstr);
     std::wstring result = bstr ? bstr : L"";
     SysFreeString(bstr);
@@ -1142,7 +1142,7 @@ inline void SetClass(hElement e, const wchar_t* cls) {
 
 inline void SetStyle(hElement e, const wchar_t* css) {
     if (!e) return;
-    IHTMLStyle* style = nullptr;
+    IHTMLStyle* style = NULL;
     if (SUCCEEDED(e->get_style(&style)) && style) {
         BSTR bstr = SysAllocString(css);
         style->put_cssText(bstr);
@@ -1292,7 +1292,7 @@ struct ControlReg_ {
     std::map<std::wstring, DISPID> eventName2Id;
     ControlReg_() { InitializeCriticalSection(&cs); }
     ~ControlReg_() {
-        if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(nullptr));
+        if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(NULL));
         DeleteCriticalSection(&cs);
     }
     void AddRef()  { InterlockedIncrement(&refCount); }
@@ -1309,22 +1309,22 @@ inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
 // If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
 // but they all share the same ControlReg_ (same WndProc, same methods).
 struct ControlInstance_ {
-    ControlReg_* reg = nullptr; // Back-pointer to the class registration
-    HWND hwnd = nullptr; // The child window we create inside IE
-    void* userData = nullptr; // Per-instance user data
-    IOleClientSite* clientSite = nullptr; // IE's hosting site for this control
-    IOleAdviseHolder* adviseHolder = nullptr;
-    IOleInPlaceSite* inPlaceSite = nullptr;
+    ControlReg_* reg = NULL; // Back-pointer to the class registration
+    HWND hwnd = NULL; // The child window we create inside IE
+    void* userData = NULL; // Per-instance user data
+    IOleClientSite* clientSite = NULL; // IE's hosting site for this control
+    IOleAdviseHolder* adviseHolder = NULL;
+    IOleInPlaceSite* inPlaceSite = NULL;
     bool active = false; // True after DoVerb(INPLACEACTIVATE)
     bool uiActive = false; // True after DoVerb(UIACTIVATE)
     RECT rcPos; // Our position inside IE's document
     SIZEL extent = { 0, 0 }; // Size in HIMETRIC units (IE sends this via SetExtent)
     std::map<DWORD, IDispatch*> sinks; // Event subscribers (from IConnectionPoint::Advise)
     DWORD nextCookie = 1; // Cookie counter for Advise/Unadvise
-    DropCallback onDrop = nullptr; // Drag-drop callbacks
-    DropEnterCallback onDragEnter = nullptr;
-    DropOverCallback onDragOver = nullptr;
-    DropLeaveCallback onDragLeave = nullptr;
+    DropCallback onDrop = NULL; // Drag-drop callbacks
+    DropEnterCallback onDragEnter = NULL;
+    DropOverCallback onDragOver = NULL;
+    DropLeaveCallback onDragLeave = NULL;
     bool dropRegistered = false;
 };
 
@@ -1359,7 +1359,7 @@ public:
     }
 
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
-        *ppv = nullptr;
+        *ppv = NULL;
         if (riid == IID_IUnknown) *ppv = static_cast<IOleObject*>(this);
         else if (riid == IID_IOleObject) *ppv = static_cast<IOleObject*>(this);
         else if (riid == IID_IOleWindow) *ppv = static_cast<IOleInPlaceObject*>(this);
@@ -1386,7 +1386,7 @@ public:
     STDMETHODIMP SetHostNames(LPCOLESTR, LPCOLESTR) override { return S_OK; }
     STDMETHODIMP Close(DWORD) override { if (m_inst->active) InPlaceDeactivate(); return S_OK; }
     STDMETHODIMP SetMoniker(DWORD, IMoniker*) override { return E_NOTIMPL; }
-    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = nullptr; return E_NOTIMPL; }
+    STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP InitFromData(IDataObject*, BOOL, DWORD) override { return E_NOTIMPL; }
     STDMETHODIMP GetClipboardData(DWORD, IDataObject**) override { return E_NOTIMPL; }
 
@@ -1422,19 +1422,19 @@ public:
                 if (!m_inst->clientSite) return E_FAIL;
                 if (m_inst->inPlaceSite) {
                     m_inst->inPlaceSite->Release();
-                    m_inst->inPlaceSite = nullptr;
+                    m_inst->inPlaceSite = NULL;
                 }
                 m_inst->clientSite->QueryInterface(IID_IOleInPlaceSite, (void**)&m_inst->inPlaceSite);
                 if (!m_inst->inPlaceSite) return E_FAIL;
                 m_inst->inPlaceSite->CanInPlaceActivate();
                 m_inst->inPlaceSite->OnInPlaceActivate();
-                IOleObject* pOle = nullptr;
+                IOleObject* pOle = NULL;
                 QueryInterface(IID_IOleObject, (void**)&pOle);
                 if (pOle) {
                     OleLockRunning(pOle, TRUE, FALSE);
                     pOle->Release();
                 }
-                IOleInPlaceFrame* pFrame = nullptr; IOleInPlaceUIWindow* pUIWin = nullptr;
+                IOleInPlaceFrame* pFrame = NULL; IOleInPlaceUIWindow* pUIWin = NULL;
                 RECT rcPos, rcClip; OLEINPLACEFRAMEINFO fi = { sizeof(fi) };
                 m_inst->inPlaceSite->GetWindowContext(&pFrame, &pUIWin, &rcPos, &rcClip, &fi);
                 if (prc) rcPos = *prc;
@@ -1445,20 +1445,20 @@ public:
                 rcPos.right = rcPos.left + w;
                 rcPos.bottom = rcPos.top + h;
                 m_inst->rcPos = rcPos;
-                HWND hwndC = nullptr; m_inst->inPlaceSite->GetWindow(&hwndC);
+                HWND hwndC = NULL; m_inst->inPlaceSite->GetWindow(&hwndC);
                 if (!m_inst->reg->wndAtom) {
                     WNDCLASSEXW wc = { sizeof(wc) };
                     wc.style = CS_HREDRAW | CS_VREDRAW;
                     wc.lpfnWndProc = CtrlWndProc;
-                    wc.hInstance = GetModuleHandle(nullptr);
-                    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+                    wc.hInstance = GetModuleHandle(NULL);
+                    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
                     wc.lpszClassName = m_inst->reg->wndClassName.c_str();
                     m_inst->reg->wndAtom = RegisterClassExW(&wc);
                 }
-                m_inst->hwnd = CreateWindowExW(0, m_inst->reg->wndClassName.c_str(), nullptr,
+                m_inst->hwnd = CreateWindowExW(0, m_inst->reg->wndClassName.c_str(), NULL,
                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | m_inst->reg->extraStyle,
                     rcPos.left, rcPos.top, rcPos.right - rcPos.left, rcPos.bottom - rcPos.top,
-                    hwndC, nullptr, GetModuleHandle(nullptr), this);
+                    hwndC, NULL, GetModuleHandle(NULL), this);
                 m_inst->active = true;
                 if (pFrame) pFrame->Release();
                 if (pUIWin) pUIWin->Release();
@@ -1492,7 +1492,7 @@ public:
         if (m_inst->hwnd) {
             int w = MulDiv(pSizel->cx, 96, 2540);
             int h = MulDiv(pSizel->cy, 96, 2540);
-            SetWindowPos(m_inst->hwnd, nullptr, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
+            SetWindowPos(m_inst->hwnd, NULL, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
         }
         return S_OK;
     }
@@ -1523,7 +1523,7 @@ public:
         if (!m_inst->active) return S_OK;
         UIDeactivate();
         m_inst->active = false;
-        IOleObject* pOle = nullptr;
+        IOleObject* pOle = NULL;
         QueryInterface(IID_IOleObject, (void**)&pOle);
         if (pOle) { OleLockRunning(pOle, FALSE, FALSE); pOle->Release(); }
         if (m_inst->dropRegistered) {
@@ -1532,7 +1532,7 @@ public:
         }
         if (m_inst->hwnd) {
             DestroyWindow(m_inst->hwnd);
-            m_inst->hwnd = nullptr;
+            m_inst->hwnd = NULL;
         }
         if (m_inst->inPlaceSite) m_inst->inPlaceSite->OnInPlaceDeactivate();
         return S_OK;
@@ -1565,7 +1565,7 @@ public:
     STDMETHODIMP GetControlInfo(CONTROLINFO* p) override {
         if (!p) return E_POINTER;
         p->cb = sizeof(CONTROLINFO);
-        p->hAccel = nullptr;
+        p->hAccel = NULL;
         p->cAccel = 0;
         p->dwFlags = 0;
         return S_OK;
@@ -1705,7 +1705,7 @@ public:
 // The ActiveXControl* is stored in GWLP_USERDATA at WM_NCCREATE time.
 // We clear it in WM_NCDESTROY to prevent dangling pointer access.
 inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    ActiveXControl* ctrl = nullptr;
+    ActiveXControl* ctrl = NULL;
     if (msg == WM_NCCREATE) {
         ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctrl);
@@ -1754,7 +1754,7 @@ public:
             *ppv = this; AddRef();
             return S_OK;
         }
-        *ppv = nullptr;
+        *ppv = NULL;
         return E_NOINTERFACE;
     }
     STDMETHODIMP_(ULONG) AddRef()  override {
@@ -1777,7 +1777,7 @@ public:
     }
     STDMETHODIMP Advise(IUnknown* pSink, DWORD* pCookie) override {
         if (!pSink || !pCookie) return E_POINTER;
-        IDispatch* disp = nullptr;
+        IDispatch* disp = NULL;
         if (FAILED(pSink->QueryInterface(IID_IDispatch, (void**)&disp))) return CONNECT_E_CANNOTCONNECT;
         *pCookie = m_inst->nextCookie++;
         m_inst->sinks[*pCookie] = disp;
@@ -1799,7 +1799,7 @@ inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnection
         *ppCP = new CtrlConnectionPoint(m_inst, static_cast<IConnectionPointContainer*>(this));
         return S_OK;
     }
-    *ppCP = nullptr;
+    *ppCP = NULL;
     return CONNECT_E_NOCONNECTION;
 }
 
@@ -1825,7 +1825,7 @@ public:
             *ppv = this; AddRef();
             return S_OK;
         }
-        *ppv = nullptr;
+        *ppv = NULL;
         return E_NOINTERFACE;
     }
     STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
@@ -1862,7 +1862,7 @@ public:
             *ppv = this; AddRef();
             return S_OK;
         }
-        *ppv = nullptr;
+        *ppv = NULL;
         return E_NOINTERFACE;
     }
     STDMETHODIMP_(ULONG) AddRef()  override {
@@ -1883,12 +1883,12 @@ public:
         if (!dst) { GlobalFree(hg); return E_OUTOFMEMORY; }
         memcpy(dst, m_text.c_str(), bytes);
         GlobalUnlock(hg);
-        pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = nullptr;
+        pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = NULL;
         return S_OK;
     }
     STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
     STDMETHODIMP QueryGetData(FORMATETC* p) override { if (!p) return E_POINTER; return (p->cfFormat == CF_UNICODETEXT && (p->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC; }
-    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { if (!p) return E_POINTER; p->ptd = nullptr; return DATA_S_SAMEFORMATETC; }
+    STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { if (!p) return E_POINTER; p->ptd = NULL; return DATA_S_SAMEFORMATETC; }
     STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
     STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
     STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
@@ -1908,9 +1908,9 @@ inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSI
 // instantiate later when it encounters an <object> tag with the matching CLSID.
 // The CLSID is deterministic: same name always produces the same GUID.
 inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
-    if (!name || !proc) return nullptr;
+    if (!name || !proc) return NULL;
     CLSID clsid = CLSIDFromName(name);
-    if (CtrlRegistry().find(clsid) != CtrlRegistry().end()) return nullptr;
+    if (CtrlRegistry().find(clsid) != CtrlRegistry().end()) return NULL;
     auto* reg = new ControlReg_();
     reg->name = name;
     reg->wndProc = proc;
@@ -1921,7 +1921,7 @@ inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, v
     auto* factory = new CtrlClassFactory(reg);
     HRESULT hr = CoRegisterClassObject(reg->clsid, factory, CLSCTX_INPROC_SERVER, REGCLS_MULTIPLEUSE, &reg->comCookie);
     factory->Release();
-    if (FAILED(hr)) { delete reg; return nullptr; }
+    if (FAILED(hr)) { delete reg; return NULL; }
     CtrlRegistry()[reg->clsid] = reg;
     return reg;
 }
@@ -1933,11 +1933,11 @@ inline void UnregisterControl(hControlClass reg) {
     reg->Release();
 }
 
-inline HWND GetControlHWND(hControl c) { return c ? c->hwnd : nullptr; }
-inline void* GetControlUserData(hControl c) { return c ? c->userData : nullptr; }
+inline HWND GetControlHWND(hControl c) { return c ? c->hwnd : NULL; }
+inline void* GetControlUserData(hControl c) { return c ? c->userData : NULL; }
 inline void SetControlUserData(hControl c, void* d) { if (c) c->userData = d; }
-inline void InvalidateControl(hControl c) { if (c && c->hwnd) ::InvalidateRect(c->hwnd, nullptr, TRUE); }
-inline hControlClass GetControlClass(hControl c) { return c ? c->reg : nullptr; }
+inline void InvalidateControl(hControl c) { if (c && c->hwnd) ::InvalidateRect(c->hwnd, NULL, TRUE); }
+inline hControlClass GetControlClass(hControl c) { return c ? c->reg : NULL; }
 
 inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb) {
     if (!reg) return;
@@ -1952,7 +1952,7 @@ inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMetho
     }
     DISPID id = reg->nextDispId--;
     reg->name2id[name] = id;
-    reg->entries[id] = { DispEntry::METHOD, cb, nullptr, nullptr };
+    reg->entries[id] = { DispEntry::METHOD, cb, NULL, NULL };
     LeaveCriticalSection(&reg->cs);
 }
 
@@ -2027,7 +2027,7 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
         if (kv.second) { kv.second->AddRef(); snapshot.push_back(kv.second); }
     }
     for (IDispatch* sink : snapshot) {
-        sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, nullptr, nullptr, nullptr);
+        sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
         sink->Release();
     }
 }
@@ -2059,10 +2059,10 @@ inline void DisableDragDrop(hControl c) {
     if (!c || !c->hwnd || !c->dropRegistered) return;
     RevokeDragDrop(c->hwnd);
     c->dropRegistered = false;
-    c->onDrop = nullptr;
-    c->onDragEnter = nullptr;
-    c->onDragOver = nullptr;
-    c->onDragLeave = nullptr;
+    c->onDrop = NULL;
+    c->onDragEnter = NULL;
+    c->onDragOver = NULL;
+    c->onDragLeave = NULL;
 }
 
 inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text ? text : L""); }
