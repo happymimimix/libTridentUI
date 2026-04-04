@@ -1,14 +1,55 @@
+#pragma once
 /*
 libTridentUI - v0.2.1 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
-Made possible by: Claude Opus 4.6 and Happy_mimimix
+Made possible by:
+Happy_mimimix
+Claude Opus 4.6
+ChatGPT 5.2 Thinking
+Gemini Pro
 
 Thread safety notice:
 All UI calls must be made from the same STA thread that called TridentInit().
 This is a COM/OLE requirement, not a library limitation.
 */
-#pragma once
+
+/*
+HOW THIS WORKS (the 30-second version):
+Every Windows machine since Windows 95 has an HTML rendering engine built in: mshtml.dll (aka "Trident",
+the engine behind Internet Explorer). This library creates a Win32 window and stuffs an instance
+of that engine inside it, like putting a browser tab into your app.
+
+The trick is that IE's engine is an "ActiveX control" — a type of COM object that can be embedded
+inside another window. To host it, we need to implement a bunch of COM interfaces that the control
+calls back into. Think of it like a plugin system: our app is the host, mshtml is the plugin.
+The plugin says "I need a window to draw in" and we respond with our HWND. It says "give me a
+frame for my toolbar" and we give it a dummy one. And so on, for about 20 different interfaces.
+
+The key interfaces WE implement (as the "container" / "host"):
+  IOleClientSite              - "I'm the app hosting you, here's how to talk to me"
+  IOleInPlaceSiteWindowless   - "Here's the window you can draw in"
+  IOleControlSite             - "I can handle your keyboard accelerators"
+  IDocHostUIHandler           - "I control the right-click menu, scrollbars, etc."
+  IDispatch                   - "I handle navigation events (like page load complete)"
+  IOleContainer               - "I can enumerate the objects I'm hosting"
+
+The key interfaces IE GIVES US (that we call into):
+  IWebBrowser2        - "Navigate to URLs, get the document, etc."
+  IOleObject          - "Activate me, close me, get my status"
+  IOleInPlaceObject   - "Here's how to resize and position me"
+  IHTMLDocument2/3    - "Here's the DOM of the loaded page"
+
+The JS <-> C++ bridge works through "window.external":
+  When JavaScript calls window.external.MyFunc(1, 2), IE looks up our IDocHostUIHandler,
+  calls GetExternal() to get an IDispatch, calls GetIDsOfNames("MyFunc") to get a numeric ID,
+  then calls Invoke(id, args) which runs our C++ callback.
+
+The ActiveX control creation works the other way around:
+  We register a class factory in memory (no registry), so when IE encounters
+  <object classid="clsid:...">, it calls our factory, which creates a COM object that
+  implements IOleObject/IDispatch/etc. IE embeds it the same way apps embed IE itself.
+*/
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -41,54 +82,36 @@ struct TridentWindowData_;
 typedef TridentWindowData_* hTrident;
 typedef IHTMLElement* hElement;
 
-struct DispArgs {
-    DISPPARAMS* params;
-    
-    size_t Count() const { return params ? params->cArgs : 0; }
-    
-    VARIANT& operator[](size_t i) {
-        return params->rgvarg[params->cArgs - 1 - i];
-    }
-    
-    std::wstring GetString(size_t i) {
-        if (i >= Count()) return L"";
-        VARIANT& v = (*this)[i];
-        return (v.vt == VT_BSTR && v.bstrVal) ? v.bstrVal : L"";
-    }
-    
-    int GetInt(size_t i, int def = 0) {
-        if (i >= Count()) return def;
-        VARIANT& v = (*this)[i];
-        if (v.vt == VT_I4) return v.lVal;
-        if (v.vt == VT_I2) return v.iVal;
-        if (v.vt == VT_R8) return (int)v.dblVal;
-        if (v.vt == VT_R4) return (int)v.fltVal;
-        return def;
-    }
-    
-    double GetDouble(size_t i, double def = 0.0) {
-        if (i >= Count()) return def;
-        VARIANT& v = (*this)[i];
-        if (v.vt == VT_R8) return v.dblVal;
-        if (v.vt == VT_R4) return (double)v.fltVal;
-        if (v.vt == VT_I4) return (double)v.lVal;
-        return def;
-    }
-    
-    bool GetBool(size_t i, bool def = false) {
-        if (i >= Count()) return def;
-        VARIANT& v = (*this)[i];
-        return (v.vt == VT_BOOL) ? (v.boolVal != VARIANT_FALSE) : def;
-    }
-};
+// DISPPARAMS argument convention:
+//
+// COM passes function arguments in REVERSE order in DISPPARAMS::rgvarg:
+//   rgvarg[cArgs-1] = first argument
+//   rgvarg[cArgs-2] = second argument
+//   rgvarg[0]       = last argument
+//
+// This is the same convention in BOTH directions:
+//   JS -> C++ (method calls): rgvarg is reverse-ordered, your callback reads them
+//   C++ -> JS (FireEvent): you pass args in reverse order, JS receives them correctly
+//
+// Example — JS calls window.external.Add(10, 20):
+//   dp->cArgs = 2
+//   dp->rgvarg[0].lVal = 20  (last arg)
+//   dp->rgvarg[1].lVal = 10  (first arg)
+//
+// Example — C++ fires event with args (42, "hello"):
+//   VARIANT args[2] = { VarBstr(L"hello"), VarInt(42) };  // reverse order!
+//   FireEvent(c, evtId, args, 2);
+
 
 struct ControlInstance_;
 typedef ControlInstance_* hControl;
 struct ControlReg_;
 typedef ControlReg_* hControlClass;
 
-using MethodCallback = std::function<HRESULT(DispArgs&, VARIANT*)>;
-using ControlMethodCallback = std::function<HRESULT(hControl, DispArgs&, VARIANT*)>;
+// Callback signatures — both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
+// See the DISPPARAMS convention comment above for how to read arguments.
+using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
+using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
 
 typedef LRESULT (*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* handled);
 typedef LRESULT (*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -161,6 +184,22 @@ inline IDataObject* CreateTextDataObject(const wchar_t* text);
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
 inline TridentWindowData_* g_trident_head = NULL;
 
+// ExternalDispatch — this is what JavaScript sees as "window.external"
+//
+// When JS calls window.external.Add(1, 2), here's what happens behind the scenes:
+//   1. IE calls GetIDsOfNames(["Add"]) -> we return a numeric DISPID
+//   2. IE calls Invoke(dispid, args=[1,2]) -> we look up the C++ callback and run it
+//
+// IDispatch is COM's version of "dynamic method lookup" — like a dictionary of
+// function pointers, keyed by name. It's how scripting languages talk to COM objects
+// without knowing their C++ class layout at compile time.
+//
+// DISPIDs count DOWN from INT32_MAX. This avoids conflicts with well-known DISPIDs
+// like CYCLECOUNT_VALUE (0), CYCLECOUNT_CYCLECOUNT (-1), CYCLECOUNT_CYCLETIMER (-5), etc.
+// We'll never run out — you'd need 2 billion bindings.
+//
+// NOTE: This object lives as a member of OleSite (not heap-allocated separately),
+// so its Release() intentionally does NOT delete this. Its lifetime is tied to OleSite.
 class ExternalDispatch : public IDispatch {
     LONG m_ref = 0;
     CRITICAL_SECTION m_cs;
@@ -203,6 +242,8 @@ public:
     STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     
+    // GetIDsOfNames — IE calls this to convert "Add" -> numeric DISPID.
+    // When JS does window.external.Add(1,2), IE first asks us "what's the ID for 'Add'?"
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
         HRESULT hr = S_OK;
         EnterCriticalSection(&m_cs);
@@ -219,6 +260,10 @@ public:
         return hr;
     }
     
+    // Invoke — IE calls this with the DISPID from GetIDsOfNames + the JS arguments.
+    // We look up the C++ callback and call it. Note: we copy the callback THEN unlock
+    // the critical section BEFORE calling the user's code. This prevents deadlocks if
+    // the user's callback tries to bind more functions.
     STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp,
                         VARIANT* res, EXCEPINFO*, UINT*) override {
         if (!(wf & DISPATCH_METHOD)) return DISP_E_MEMBERNOTFOUND;
@@ -227,12 +272,46 @@ public:
         if (it == m_id2func.end()) { LeaveCriticalSection(&m_cs); return DISP_E_MEMBERNOTFOUND; }
         auto fn = it->second;
         LeaveCriticalSection(&m_cs);
-        DispArgs args = { dp };
         if (res) VariantInit(res);
-        return fn(args, res);
+        return fn(dp, res);
     }
 };
 
+// OleSite — the "container" that hosts the IE browser control.
+//
+// This is the biggest and most complex class in the library. It implements 7 COM interfaces
+// that IE's engine needs from its host. Think of it as the "other half of a conversation":
+// IE says "I need X" and OleSite responds with the appropriate answer.
+//
+// Here's what each interface does:
+//
+//   IOleClientSite              The most basic hosting interface. IE calls this to ask
+//                               "who's hosting me?" and "where should I save my data?"
+//                               We mostly return E_NOTIMPL because we don't save anything.
+//
+//   IOleInPlaceSiteWindowless   Handles the visual embedding. IE asks for the HWND to draw
+//                               in, reports activation/deactivation, and does mouse capture.
+//                               The "Windowless" part means IE *can* draw without its own
+//                               HWND (directly onto ours). We support both modes.
+//
+//   IOleControlSite             Keyboard and focus management. IE asks us to translate
+//                               accelerator keys and track focus changes.
+//
+//   IObjectWithSite             A generic "set my parent" interface. IE uses this to
+//                               establish a bidirectional link between itself and its host.
+//
+//   IOleContainer               IE asks "what other objects are you hosting?" We return
+//                               a list containing just the one browser instance.
+//
+//   IDocHostUIHandler           The UI customization interface. This is where we:
+//                               - Block the right-click context menu (ShowContextMenu -> S_OK)
+//                               - Remove the 3D border (GetHostInfo -> DOCHOSTUIFLAG_NO3DBORDER)
+//                               - Provide the window.external object (GetExternal -> &ext)
+//
+//   IDispatch                   We implement IDispatch ourselves to receive navigation
+//                               events from the browser (CYCLECOUNT_CYCLETIMER, DISPID_DOCUMENTCOMPLETE).
+//                               When the page finishes loading, we hook up our UI handler.
+//
 class OleSite :
     public IOleClientSite,
     public IOleInPlaceSiteWindowless,
@@ -259,6 +338,10 @@ public:
     
     IWebBrowser2* GetBrowser() { return m_pBrowser; }
     
+    // SetupUIHandler — hooks our IDocHostUIHandler into the loaded document.
+    // We have to do this AFTER the page loads because the document object changes on
+    // every navigation. The ICustomDoc interface is MSHTML's way of saying "let me swap
+    // in a different UI handler for this document".
     void SetupUIHandler() {
         if (!m_pBrowser) return;
         IDispatch* d = NULL;
@@ -272,14 +355,23 @@ public:
         d->Release();
     }
 
+    // Create — the big initialization sequence. This is where we actually create the
+    // IE browser control and wire everything together. Here's the step-by-step:
     bool Create(HWND hwnd) {
         m_hwnd = hwnd;
 
+        // Step 1: Create the WebBrowser COM object. This is the IE engine itself.
+        // CLSID_WebBrowser is {8856F961-340A-11D0-A96B-00C04FD705A2} — it lives in
+        // ieframe.dll and has been there since IE3.
         HRESULT hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_ALL, IID_IOleObject, (void**)&m_pOle);
         if (FAILED(hr)) return false;
 
+        // Step 2: Tell IE "I'm your host". This lets IE call back into us for
+        // window management, keyboard handling, etc.
         m_pOle->SetClientSite(static_cast<IOleClientSite*>(this));
 
+        // Step 3: Initialize IE's persistent state from scratch (empty, no saved data).
+        // Without this, IE might try to load from a stream that doesn't exist.
         IPersistStreamInit* psi = NULL;
         m_pOle->QueryInterface(IID_IPersistStreamInit, (void**)&psi);
         if (psi) {
@@ -287,29 +379,47 @@ public:
             psi->Release();
         }
 
+        // Step 4: Get IE's drawing interface. We try the most capable version first
+        // (IViewObjectEx) and fall back to simpler ones. This is needed for ShowObject()
+        // to request a redraw of the browser area.
         hr = m_pOle->QueryInterface(IID_IViewObjectEx, (void**)&m_pView);
         if (FAILED(hr)) hr = m_pOle->QueryInterface(IID_IViewObject2, (void**)&m_pView);
         if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
         m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
+        // Step 5: Activate IE "in place" — this makes it create its child windows inside
+        // our HWND and start rendering. OLEIVERB_INPLACEACTIVATE is the command that says
+        // "go live inside this rectangle".
         RECT rc;
         GetClientRect(hwnd, &rc);
         hr = m_pOle->DoVerb(OLEIVERB_INPLACEACTIVATE, NULL, static_cast<IOleClientSite*>(this), 0, hwnd, &rc);
         if (FAILED(hr)) { Destroy(); return false; }
 
+        // Step 6: Establish a bidirectional site link. Some COM objects use IObjectWithSite
+        // as an alternative to IOleClientSite for the "who's my parent?" question.
         IObjectWithSite* pSite = NULL;
         m_pOle->QueryInterface(IID_IObjectWithSite, (void**)&pSite);
         if (pSite) {
             pSite->SetSite(static_cast<IOleClientSite*>(this));
             pSite->Release();
         }
+
+        // Step 7: Get the IWebBrowser2 interface — this is our main handle to the browser.
+        // Through it we can navigate to URLs, get the document object, execute script, etc.
         m_pOle->QueryInterface(IID_IWebBrowser2, (void**)&m_pBrowser);
         if (!m_pBrowser) { Destroy(); return false; }
 
+        // Step 8: Subscribe to browser events (like CYCLECOUNT_CYCLETIMER)
+        // so we know when navigation completes and can hook up our UI handler.
         ConnectEvents(TRUE);
         return true;
     }
     
+    // Destroy — disconnects everything and releases COM references.
+    // This must be called before the host window is destroyed, because IE's child windows
+    // are parented to our HWND. Calling Close(OLECLOSE_NOSAVE) tells IE to deactivate
+    // and tear down its UI. SetClientSite(NULL) breaks the back-pointer so IE won't
+    // try to call us after we're gone.
     void Destroy() {
         ConnectEvents(FALSE);
         if (m_pBrowser) { m_pBrowser->Release(); m_pBrowser = NULL; }
@@ -331,6 +441,9 @@ public:
         }
     }
 
+    // QueryInterface — COM's way of asking "do you support interface X?"
+    // IE calls this constantly during initialization to discover what we can do.
+    // Each interface we return tells IE about a different capability we offer.
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         *ppv = NULL;
         if (riid == IID_IUnknown) *ppv = static_cast<IOleWindow*>(this);
@@ -350,11 +463,16 @@ public:
     STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
     STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
+    // ---- IOleClientSite ----
+    // These methods let IE ask us about its hosting environment.
+    // Most are stubs because we're a simple host — we don't save documents,
+    // don't support monikers (persistent object names), etc.
     STDMETHODIMP SaveObject() override { return E_NOTIMPL; }
     STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP GetContainer(IOleContainer** p) override {
         return QueryInterface(IID_IOleContainer, (void**)p);
     }
+    // ShowObject — IE says "I've just activated, you might want to redraw me"
     STDMETHODIMP ShowObject() override {
         if (!m_hwnd || !m_pView) return E_FAIL;
         HDC hDC = ::GetDC(m_hwnd);
@@ -365,6 +483,9 @@ public:
     }
     STDMETHODIMP OnShowWindow(BOOL) override { return E_NOTIMPL; }
     STDMETHODIMP RequestNewObjectLayout() override { return E_NOTIMPL; }
+
+    // ---- IObjectWithSite ----
+    // A generic parent-child link. IE uses this to find us later.
     STDMETHODIMP SetSite(IUnknown* p) override {
         if (m_pUnkSite) m_pUnkSite->Release();
         m_pUnkSite = p;
@@ -376,6 +497,9 @@ public:
         return m_pUnkSite->QueryInterface(riid, pp);
     }
 
+    // ---- IOleInPlaceSite / IOleInPlaceSiteWindowless ----
+    // This is where the magic happens: IE asks "can I activate inside your window?"
+    // and we say yes, give it our HWND, and tell it how big the available area is.
     STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_hwnd; return S_OK; }
     STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
     STDMETHODIMP CanInPlaceActivate() override { return S_OK; }
@@ -384,16 +508,19 @@ public:
         return OnInPlaceActivateEx(&dummy, 0);
     }
     STDMETHODIMP OnUIActivate() override { m_bUIActivated = true; return S_OK; }
+    // GetWindowContext — IE asks "give me a frame, a UI window, and the rectangles
+    // I can draw in". We provide a dummy InlineFrame (which is basically a no-op
+    // implementation of IOleInPlaceFrame), and tell IE it can use our entire client area.
     STDMETHODIMP GetWindowContext(IOleInPlaceFrame** ppFrame, IOleInPlaceUIWindow** ppDoc, LPRECT pPos, LPRECT pClip, LPOLEINPLACEFRAMEINFO pFI) override {
         if (!ppFrame || !ppDoc || !pPos || !pClip || !pFI) return E_POINTER;
         *ppFrame = new InlineFrame(m_hwnd);
-        *ppDoc = NULL;
+        *ppDoc = NULL; // No separate UI window (we're not an MDI app)
         GetClientRect(m_hwnd, pPos);
-        *pClip = *pPos;
+        *pClip = *pPos; // Clipping rect = position rect (no clipping)
         pFI->cb = sizeof(OLEINPLACEFRAMEINFO);
         pFI->fMDIApp = FALSE;
         pFI->hwndFrame = m_hwnd;
-        pFI->haccel = NULL;
+        pFI->haccel = NULL; // No accelerator table
         pFI->cAccelEntries = 0;
         return S_OK;
     }
@@ -403,6 +530,11 @@ public:
     STDMETHODIMP DiscardUndoState() override { return E_NOTIMPL; }
     STDMETHODIMP DeactivateAndUndo() override { return E_NOTIMPL; }
     STDMETHODIMP OnPosRectChange(LPCRECT) override { return E_NOTIMPL; }
+
+    // OnInPlaceActivateEx — IE is going live inside our window.
+    // OleLockRunning prevents the OLE object from being garbage-collected while active.
+    // We try windowless mode first (IE draws directly on our HDC) — if that fails,
+    // we fall back to windowed mode (IE creates its own child HWND).
     STDMETHODIMP OnInPlaceActivateEx(BOOL*, DWORD dwFlags) override {
         if (!m_hwnd || !m_pOle) return E_UNEXPECTED;
         OleLockRunning(m_pOle, TRUE, FALSE);
@@ -485,7 +617,17 @@ public:
     }
     STDMETHODIMP LockContainer(BOOL f) override { m_bLocked = (f != FALSE); return S_OK; }
     STDMETHODIMP ParseDisplayName(IBindCtx*, LPOLESTR, ULONG*, IMoniker**) override { return E_NOTIMPL; }
+
+    // ---- IDocHostUIHandler ----
+    // This is our main UI customization point. IE calls these to ask how we want
+    // the browser to look and behave.
+
+    // ShowContextMenu — return S_OK to BLOCK the default right-click menu.
+    // Return S_FALSE if you want the default IE menu to appear.
     STDMETHODIMP ShowContextMenu(DWORD, POINT*, IUnknown*, IDispatch*) override { return S_OK; }
+
+    // GetHostInfo — we set NO3DBORDER to get a flat, modern-looking browser area
+    // instead of the ugly sunken 3D border from the Windows 95 era.
     STDMETHODIMP GetHostInfo(DOCHOSTUIINFO* p) override {
         if (p) {
             p->cbSize = sizeof(DOCHOSTUIINFO);
@@ -504,6 +646,11 @@ public:
     STDMETHODIMP TranslateAccelerator(LPMSG, const GUID*, DWORD) override { return S_FALSE; }
     STDMETHODIMP GetOptionKeyPath(LPOLESTR*, DWORD) override { return S_OK; }
     STDMETHODIMP GetDropTarget(IDropTarget*, IDropTarget**) override { return E_NOTIMPL; }
+
+    // GetExternal — THE KEY METHOD for the JS bridge!
+    // When JavaScript calls "window.external", IE calls this to get the IDispatch
+    // that represents the external object. We return our ExternalDispatch, which
+    // maps JS function calls to C++ callbacks registered via BindFunction().
     STDMETHODIMP GetExternal(IDispatch** pp) override {
         if (!pp) return E_POINTER;
         *pp = &ext;
@@ -512,6 +659,12 @@ public:
     }
     STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { *pp = NULL; return S_OK; }
     STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { *pp = NULL; return S_OK; }
+
+    // ---- IDispatch (for browser events) ----
+    // We subscribe to DWebBrowserEvents2 to know when navigation completes.
+    // When IE fires DISPID_DOCUMENTCOMPLETE, we call SetupUIHandler() to hook
+    // our IDocHostUIHandler into the new document. This is necessary because
+    // the document object changes on every navigation.
     STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
@@ -522,6 +675,10 @@ public:
     }
 
 private:
+    // ConnectEvents — subscribe/unsubscribe to IE's navigation events.
+    // IE exposes events through "connection points" — a COM pattern where you
+    // give IE an IDispatch, and it calls Invoke() on it whenever something happens.
+    // We connect to DWebBrowserEvents2 to catch DISPID_DOCUMENTCOMPLETE.
     void ConnectEvents(BOOL advise) {
         if (!m_pBrowser) return;
         IConnectionPointContainer* cpc = NULL;
@@ -594,29 +751,53 @@ private:
         STDMETHODIMP Reset() override { m_pos = 0; return S_OK; }
         STDMETHODIMP Clone(IEnumUnknown**) override { return E_NOTIMPL; }
     };
-    LONG m_ref;
-    HWND m_hwnd;
-    IUnknown* m_pUnkSite;
-    IViewObject* m_pView;
-    IOleInPlaceObjectWindowless* m_pInPlace;
-    IOleObject* m_pOle;
-    IWebBrowser2* m_pBrowser;
-    DWORD m_cookie;
-    bool m_bWindowless;
+    // ---- Private members ----
+    LONG m_ref; // COM reference count
+    HWND m_hwnd; // The host window we draw into
+    IUnknown* m_pUnkSite; // IObjectWithSite back-pointer
+    IViewObject* m_pView; // IE's drawing interface
+    IOleInPlaceObjectWindowless* m_pInPlace; // IE's in-place positioning interface
+    IOleObject* m_pOle; // THE main IE COM object
+    IWebBrowser2* m_pBrowser; // Our handle to the browser (Navigate, get_Document, etc.)
+    DWORD m_cookie; // Connection point cookie (for unsubscribing events)
+    bool m_bWindowless; // True if IE is drawing without its own HWND
     bool m_bFocused;
     bool m_bCaptured;
     bool m_bUIActivated;
     bool m_bInPlaceActive;
     bool m_bLocked;
 };
+
+// TridentWindowData_ — the internal data behind an hTrident handle.
+// This is a node in a doubly-linked list (g_trident_head). Each node owns
+// an OleSite (the COM hosting layer) and optionally a user WndProc and user data.
 struct TridentWindowData_ {
-    HWND hwnd = NULL;
-    OleSite* site = NULL;
-    TridentWndProc userProc = NULL;
-    void* userData = NULL;
-    bool alive = true;
-    TridentWindowData_* next = NULL;
+    HWND hwnd = NULL; // The Win32 window
+    OleSite* site = NULL; // The COM hosting layer (Release'd, not deleted)
+    TridentWndProc userProc = NULL; // User's custom WndProc (optional)
+    void* userData = NULL; // User's custom data (optional)
+    bool alive = true; // False after WM_NCDESTROY
+    TridentWindowData_* prev = nullptr; // Previous node in the linked list
+    TridentWindowData_* next = nullptr; // Next node in the linked list
 };
+// TridentHostWndProc — the Win32 window procedure for the host window.
+// This handles window lifecycle and routes messages:
+//   - WM_NCCREATE: associate our TridentWindowData_ with the HWND
+//   - WM_SIZE: tell the embedded IE control about the new size
+//   - WM_CLOSE: trigger window destruction (cleanup happens in WM_NCDESTROY)
+//   - WM_NCDESTROY: the LAST message a window receives — we clean up everything here
+//     (destroy the OLE site, remove from the window chain, delete the data struct).
+//     This is the safe place to free resources because no more messages will arrive.
+// TridentHostWndProc — the window procedure for our host window.
+//
+// Message flow:
+//   1. User's WndProc gets first crack (if set via SetWndProc). If it sets handled=true, we stop.
+//   2. WM_SIZE -> resize the IE control to fill our client area
+//   3. WM_CLOSE -> DestroyWindow, which triggers WM_NCDESTROY
+//   4. WM_NCDESTROY -> THE cleanup handler. This is the LAST message a window ever receives.
+//      We clear GWLP_USERDATA (so NavigateToHTML can detect "window is gone"),
+//      destroy the OLE site, remove from the linked list, and delete h.
+//      After this point, the hTrident handle is INVALID — using it is undefined behavior.
 inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
@@ -645,12 +826,10 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
             h->hwnd = NULL;
             h->alive = false;
             if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
-            // Remove from chain
-            TridentWindowData_** pp = &g_trident_head;
-            while (*pp) {
-                if (*pp == h) { *pp = h->next; break; }
-                pp = &(*pp)->next;
-            }
+            // Remove from doubly-linked list (O(1))
+            if (h->prev) h->prev->next = h->next;
+            else g_trident_head = h->next;
+            if (h->next) h->next->prev = h->prev;
             delete h;
             return 0;
         }
@@ -677,6 +856,12 @@ inline void TridentShutdown() {
     OleUninitialize();
 }
 
+// RunMessageLoop — standard Win32 message loop with IE keyboard handling.
+// IE needs to process Tab, Enter, Ctrl+C, etc. through its own TranslateAccelerator.
+// Without this, keyboard input in the browser would be broken (you couldn't tab
+// between form fields, copy text, etc.). We check IsChild to make sure we only
+// send keystrokes to the window that actually owns the focused control — otherwise
+// a background window could steal keys from the foreground window.
 inline void RunMessageLoop() {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
@@ -718,8 +903,10 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
         delete d;
         return NULL;
     }
-    // Add to chain
+    // Insert at head of doubly-linked list
+    d->prev = NULL;
     d->next = g_trident_head;
+    if (g_trident_head) g_trident_head->prev = d;
     g_trident_head = d;
     return d;
 }
@@ -732,11 +919,9 @@ inline void CloseTridentWindow(hTrident h) {
         // This shouldn't happen normally but we still handle it here anyways.
         h->alive = false;
         if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
-        TridentWindowData_** pp = &g_trident_head;
-        while (*pp) {
-            if (*pp == h) { *pp = h->next; break; }
-            pp = &(*pp)->next;
-        }
+        if (h->prev) h->prev->next = h->next;
+        else g_trident_head = h->next;
+        if (h->next) h->next->prev = h->prev;
         delete h;
     }
 }
@@ -775,17 +960,51 @@ inline void NavigateToRes(hTrident h, const wchar_t* resName) {
     NavigateTo(h, url.c_str());
 }
 
+// NavigateToHTML — loads an HTML string directly into the browser.
+//
+// This is trickier than you'd think. IE doesn't have a simple "load this string" API.
+// Instead, we have to:
+//   1. Navigate to about:blank (creates an empty document)
+//   2. Wait for about:blank to fully load (pump messages until READYSTATE_COMPLETE)
+//   3. Get the IHTMLDocument2 from the loaded document
+//   4. Call document.write() to inject our HTML
+//   5. Call document.close() to finalize
+//
+// The message pump in step 2 is dangerous: while we're pumping, ANY Windows message
+// can fire — including WM_CLOSE, which would destroy our window and delete h.
+// That's why we:
+//   - AddRef the browser to keep it alive during the pump
+//   - Save hwnd to a local variable (safe even after h is deleted)
+//   - Check IsWindow(hwnd) in the loop (if window died, bail out)
+//   - Re-fetch h from GWLP_USERDATA after the loop (if it's 0, h was deleted)
+// NavigateToHTML — loads an HTML string into the browser.
+//
+// There's no "load this string directly" API in IE. The workaround:
+//   1. Navigate to about:blank (creates an empty document)
+//   2. Wait for it to finish loading (pump messages while waiting)
+//   3. Get the IHTMLDocument2 interface from the loaded document
+//   4. Call document.write(html) to replace the content
+//   5. Call document.close() to finish
+//
+// The message pumping (step 2) is dangerous: while we pump, ANY message can be
+// processed — including WM_CLOSE, which would destroy h. To survive this:
+//   - We AddRef the browser (so it doesn't get freed under us)
+//   - We save hwnd on the stack (so we can call IsWindow without touching h)
+//   - After the pump, we re-fetch h from GWLP_USERDATA (which WM_NCDESTROY clears to 0)
+//   - If h is NULL, the window was destroyed during the pump, so we bail
 inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     IWebBrowser2* b = GetTridentBrowser(h);
     if (!b) return;
-    b->AddRef();
-    HWND hwnd = GetTridentHWND(h);
+    b->AddRef(); // prevent browser from being freed during pump
+    HWND hwnd = GetTridentHWND(h); // stack copy — safe even if h is deleted
     
     NavigateTo(h, L"about:blank");
     
+    // Pump messages until about:blank is fully loaded.
+    // We can't touch h during this loop — it might get deleted by WM_NCDESTROY!
     READYSTATE st;
     while (SUCCEEDED(b->get_ReadyState(&st)) && st != READYSTATE_COMPLETE) {
-        if (!IsWindow(hwnd)) { b->Release(); return; }
+        if (!IsWindow(hwnd)) { b->Release(); return; } // window destroyed during pump
         MSG msg;
         while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
@@ -794,17 +1013,21 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
         _mm_pause();
     }
     
-    // Get h again after the message loop
+    // Re-acquire h from the window. If WM_NCDESTROY fired, GWLP_USERDATA is 0.
     h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     if (!h || !IsWindow(hwnd)) { b->Release(); return; }
     if (h->site) h->site->SetupUIHandler();
     
+    // Now write the HTML into the blank document using document.write().
+    // This is the same as doing document.write() from JavaScript.
     IDispatch* d = NULL;
     b->get_Document(&d);
     if (!d) { b->Release(); return; }
     
     IHTMLDocument2* doc = NULL;
     if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
+        // document.write() expects a SAFEARRAY of VARIANTs containing BSTRs.
+        // Yeah, it's a lot of boilerplate for what's essentially one function call.
         SAFEARRAY* sa = SafeArrayCreateVector(VT_VARIANT, 0, 1);
         VARIANT* pv;
         SafeArrayAccessData(sa, (void**)&pv);
@@ -812,7 +1035,7 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
         pv->bstrVal = SysAllocString(html);
         SafeArrayUnaccessData(sa);
         doc->write(sa);
-        doc->close();
+        doc->close(); // Finalize the document — like closing a file after writing
         SafeArrayDestroy(sa);
         doc->Release();
     }
@@ -979,7 +1202,43 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
     return result;
 }
 
-// ActiveX stuff
+// ============================================================================
+// ActiveX Control Creation
+// ============================================================================
+//
+// This section lets you create CUSTOM ActiveX controls that can be embedded
+// in HTML pages via <object> tags. It's the reverse of the OleSite section above:
+//
+//   OleSite = "we host IE's ActiveX control inside our window"
+//   ActiveXControl = "IE hosts OUR ActiveX control inside its page"
+//
+// How it works:
+//   1. You call RegisterControl("MyWidget", myWndProc) — this registers a COM
+//      class factory in memory (no registry!) using CoRegisterClassObject.
+//   2. You get back a deterministic CLSID generated from the name hash.
+//   3. In your HTML: <object classid="clsid:{that-guid}" width="300" height="200">
+//   4. When IE encounters that <object> tag, it calls CoCreateInstance with the CLSID,
+//      which hits our class factory, which creates an ActiveXControl object.
+//   5. IE calls DoVerb(INPLACEACTIVATE) on it, and our control creates a child window
+//      inside IE's document area. Your WndProc handles WM_PAINT, mouse clicks, etc.
+//   6. JavaScript can call methods/properties on the control via IDispatch.
+//
+// The control implements these interfaces (IE requires all of them):
+//   IOleObject              - Basic embedding protocol
+//   IOleInPlaceObject       - "I have a window inside your window"
+//   IOleInPlaceActiveObject - Keyboard accelerator forwarding
+//   IOleControl             - Control-specific protocol
+//   IViewObject2            - "Here's how to draw me when I'm not active"
+//   IPersistStreamInit      - "I have no persistent state" (stub)
+//   IObjectSafety           - "Trust me, I'm safe" (self-declaration)
+//   IDispatch               - Methods and properties callable from JavaScript
+//   IConnectionPointContainer - Outbound events (C++ -> JS)
+//   IDropTarget/IDropSource - OLE drag & drop
+//   IProvideClassInfo2      - Tells IE which outbound event interface to use
+//
+
+// CLSIDFromName — generates a deterministic GUID from a control name using FNV-1a hash.
+// Same name always produces the same CLSID, so you can hardcode it in HTML.
 inline CLSID CLSIDFromName(const wchar_t* name) {
     CLSID c = {};
     uint32_t h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0xfedcba98, h4 = 0x76543210;
@@ -1011,21 +1270,25 @@ struct DispEntry {
     PropertySetter setter;
 };
 
+// ControlReg_ — stores everything about a registered control CLASS (shared by all instances).
+// Think of it like a "template": the WndProc, the CLSID, the bound methods/properties.
+// Reference-counted because both the registry and active instances hold pointers to it.
+// UnregisterControl releases the registry's ref; instances release theirs in ~ActiveXControl.
 struct ControlReg_ {
-    LONG refCount = 1;
+    LONG refCount = 1; // Registry holds 1, each ActiveXControl instance adds 1
     std::wstring name;
     ControlWndProc wndProc;
     void* defaultUserData;
     CLSID clsid;
-    DWORD comCookie;
-    std::wstring wndClassName;
-    ATOM wndAtom = 0;
-    DWORD extraStyle;
-    CRITICAL_SECTION cs;
-    DISPID nextDispId = INT32_MAX;
+    DWORD comCookie; // CoRegisterClassObject cookie — needed to unregister
+    std::wstring wndClassName; // "TridentControl_" + name
+    ATOM wndAtom = 0; // RegisterClassEx return value
+    DWORD extraStyle; // Extra WS_ flags for CreateWindowEx
+    CRITICAL_SECTION cs; // Protects the maps below
+    DISPID nextDispId = INT32_MAX; // Method/property IDs count down from here
     std::map<std::wstring, DISPID> name2id;
     std::map<DISPID, DispEntry> entries;
-    DISPID nextEventId = INT32_MAX;
+    DISPID nextEventId = INT32_MAX; // Event IDs also count down (separate counter)
     std::map<std::wstring, DISPID> eventName2Id;
     ControlReg_() { InitializeCriticalSection(&cs); }
     ~ControlReg_() {
@@ -1036,25 +1299,29 @@ struct ControlReg_ {
     void Release() { if (InterlockedDecrement(&refCount) == 0) delete this; }
 };
 
+// Global registry: CLSID -> ControlReg_*. This is how CoCreateInstance finds our factory.
 inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
     static std::map<CLSID, ControlReg_*, CLSIDCompare> s;
     return s;
 }
 
+// ControlInstance_ — per-instance data for each <object> tag on a page.
+// If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
+// but they all share the same ControlReg_ (same WndProc, same methods).
 struct ControlInstance_ {
-    ControlReg_* reg = NULL;
-    HWND hwnd = NULL;
-    void* userData = NULL;
-    IOleClientSite* clientSite = NULL;
+    ControlReg_* reg = NULL; // Back-pointer to the class registration
+    HWND hwnd = NULL; // The child window we create inside IE
+    void* userData = NULL; // Per-instance user data
+    IOleClientSite* clientSite = NULL; // IE's hosting site for this control
     IOleAdviseHolder* adviseHolder = NULL;
     IOleInPlaceSite* inPlaceSite = NULL;
-    bool active = false;
-    bool uiActive = false;
-    RECT rcPos;
-    SIZEL extent = { 0, 0 };
-    std::map<DWORD, IDispatch*> sinks;
-    DWORD nextCookie = 1;
-    DropCallback onDrop = NULL;
+    bool active = false; // True after DoVerb(INPLACEACTIVATE)
+    bool uiActive = false; // True after DoVerb(UIACTIVATE)
+    RECT rcPos; // Our position inside IE's document
+    SIZEL extent = { 0, 0 }; // Size in HIMETRIC units (IE sends this via SetExtent)
+    std::map<DWORD, IDispatch*> sinks; // Event subscribers (from IConnectionPoint::Advise)
+    DWORD nextCookie = 1; // Cookie counter for Advise/Unadvise
+    DropCallback onDrop = NULL; // Drag-drop callbacks
     DropEnterCallback onDragEnter = NULL;
     DropOverCallback onDragOver = NULL;
     DropLeaveCallback onDragLeave = NULL;
@@ -1123,6 +1390,32 @@ public:
     STDMETHODIMP InitFromData(IDataObject*, BOOL, DWORD) override { return E_NOTIMPL; }
     STDMETHODIMP GetClipboardData(DWORD, IDataObject**) override { return E_NOTIMPL; }
 
+    // DoVerb — IE tells us to activate. This is where our control comes alive.
+    //
+    // When IE encounters <object classid="..."> in HTML, it creates our ActiveXControl
+    // via the class factory, then calls DoVerb(OLEIVERB_INPLACEACTIVATE).
+    // Our job: create a child window inside IE's document and start drawing.
+    //
+    // The activation sequence:
+    //   1. Get IOleInPlaceSite from our container (IE's OLE site for this <object>)
+    //   2. Ask permission to activate: CanInPlaceActivate() + OnInPlaceActivate()
+    //   3. Lock ourselves as "running" so COM doesn't garbage-collect us
+    //   4. Get the container window and the rectangle we should occupy
+    //   5. Handle zero-size rect (IE sometimes gives us position but no size yet —
+    //      fall back to the HIMETRIC extent that SetExtent() stored earlier)
+    //   6. Register a Win32 window class and create a child window
+    //   7. Our CtrlWndProc routes messages to the user's ControlWndProc callback
+    // DoVerb — IE says "activate yourself". This is where our control comes to life.
+    //
+    // The activation sequence:
+    //   1. Get IOleInPlaceSite from IE (the site that will host our window)
+    //   2. Ask permission: CanInPlaceActivate? OnInPlaceActivate!
+    //   3. Lock ourselves running (prevent premature garbage collection)
+    //   4. Get the container window and position from IE
+    //   5. If IE gave us a zero-size rect (common!), use the HIMETRIC extent
+    //      that IE set earlier via SetExtent (from the HTML width/height attributes)
+    //   6. Register a Win32 window class and create our child window inside IE
+    //   7. The user's WndProc starts receiving WM_PAINT, mouse clicks, etc.
     STDMETHODIMP DoVerb(LONG iVerb, LPMSG, IOleClientSite*, LONG, HWND hwndParent, LPCRECT prc) override {
         if (iVerb == OLEIVERB_INPLACEACTIVATE || iVerb == OLEIVERB_UIACTIVATE || iVerb == OLEIVERB_SHOW) {
             if (!m_inst->active) {
@@ -1189,6 +1482,10 @@ public:
     STDMETHODIMP IsUpToDate() override { return S_OK; }
     STDMETHODIMP GetUserClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
     STDMETHODIMP GetUserType(DWORD, LPOLESTR*) override { return E_NOTIMPL; }
+    // SetExtent — IE tells us how big we should be, in HIMETRIC units (1 HIMETRIC = 0.01mm).
+    // This gets called BEFORE DoVerb, from the HTML width/height attributes.
+    // We store it so DoVerb can use it as fallback when IE gives us a zero-size rect.
+    // Conversion: pixels = HIMETRIC * 96 / 2540 (at standard 96 DPI)
     STDMETHODIMP SetExtent(DWORD dwAspect, SIZEL* pSizel) override {
         if (dwAspect != DVASPECT_CONTENT || !pSizel) return E_INVALIDARG;
         m_inst->extent = *pSizel;
@@ -1300,19 +1597,35 @@ public:
     STDMETHODIMP GetSizeMax(ULARGE_INTEGER* p) override { if (!p) return E_POINTER; p->QuadPart = 0; return S_OK; }
     STDMETHODIMP InitNew() override { return S_OK; }
 
+    // ---- IObjectSafety ----
+    // IE asks "are you safe to run without security warnings?"
+    // We say YES to both UNTRUSTED_CALLER (safe for scripting) and UNTRUSTED_DATA
+    // (safe for initialization). This is pure self-declaration — there's no
+    // verification, no signature, no certificate. This is literally why ActiveX
+    // got such a bad security reputation: any control can say "trust me" and IE believes it.
+    // For us it's fine because our controls run in our own process, not from the internet.
     STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override {
         *sup = *en = INTERFACESAFE_FOR_UNTRUSTED_CALLER | INTERFACESAFE_FOR_UNTRUSTED_DATA;
         return S_OK;
     }
     STDMETHODIMP SetInterfaceSafetyOptions(REFIID, DWORD, DWORD) override { return S_OK; }
 
-    STDMETHODIMP GetClassInfo(ITypeInfo**) override { return E_NOTIMPL; }
+    // ---- IProvideClassInfo2 ----
+    // IE uses this to find out which interface our outbound events use.
+    // GetGUID(GUIDKIND_DEFAULT_SOURCE_DISP_IID) tells IE "my events come through IDispatch".
+    // Without this, IE's attachEvent() can't find our connection point.
+    STDMETHODIMP GetClassInfo(ITypeInfo**) override { return E_NOTIMPL; } // No type library
     STDMETHODIMP GetGUID(DWORD dwGuidKind, GUID* pGUID) override {
         if (!pGUID) return E_POINTER;
         if (dwGuidKind == GUIDKIND_DEFAULT_SOURCE_DISP_IID) { *pGUID = IID_IDispatch; return S_OK; }
         return E_INVALIDARG;
     }
 
+    // ---- IDispatch (control methods/properties) ----
+    // Same pattern as ExternalDispatch, but for the control itself.
+    // JS calls canvas1.Add(3,7) -> GetIDsOfNames("Add") -> Invoke(dispid, [3,7])
+    // Methods use ControlMethodCallback which includes the hControl parameter,
+    // so your callback knows WHICH control instance is being called.
     STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
@@ -1341,9 +1654,8 @@ public:
         DispEntry entry = it->second;
         LeaveCriticalSection(&m_inst->reg->cs);
         if ((wf & DISPATCH_METHOD) && entry.type == DispEntry::METHOD) {
-            DispArgs args = { dp };
             if (res) VariantInit(res);
-            return entry.method(m_inst, args, res);
+            return entry.method(m_inst, dp, res);
         }
         if ((wf & DISPATCH_PROPERTYGET) && entry.type == DispEntry::PROPERTY && entry.getter) {
             if (res) VariantInit(res);
@@ -1388,6 +1700,10 @@ public:
     STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 };
 
+// CtrlWndProc — the internal window procedure for ActiveX control child windows.
+// This is the bridge between Win32 messages and the user's ControlWndProc callback.
+// The ActiveXControl* is stored in GWLP_USERDATA at WM_NCCREATE time.
+// We clear it in WM_NCDESTROY to prevent dangling pointer access.
 inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     ActiveXControl* ctrl = NULL;
     if (msg == WM_NCCREATE) {
@@ -1406,6 +1722,26 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
+// CtrlConnectionPoint — handles the "outbound event" subscription.
+//
+// COM events work through "connection points": the control says "I fire events through
+// IDispatch", and IE says "here's my IDispatch sink — call Invoke() on it when something
+// happens". IE subscribes via Advise(), unsubscribes via Unadvise().
+//
+// When your C++ code calls FireEvent(), it iterates over all subscribed sinks and calls
+// Invoke() on each one. That's how events flow from C++ -> JavaScript.
+//
+// This object holds a strong reference (AddRef) to the parent ActiveXControl via m_pCPC,
+// ensuring the control stays alive as long as anyone holds this connection point.
+// CtrlConnectionPoint — handles event subscriptions from JavaScript.
+//
+// When JS does obj.attachEvent("OnClick", handler), IE calls:
+//   1. FindConnectionPoint(IID_IDispatch) -> gets a CtrlConnectionPoint
+//   2. Advise(handler_dispatch) -> we store the handler in our sink list
+//
+// When C++ calls FireEvent(), we iterate all stored sinks and call Invoke() on each.
+// The connection point AddRef's the parent ActiveXControl (via m_pCPC) so the control
+// stays alive as long as someone holds a connection point reference.
 class CtrlConnectionPoint : public IConnectionPoint {
     LONG m_ref; ControlInstance_* m_inst;
     IConnectionPointContainer* m_pCPC;
@@ -1467,6 +1803,19 @@ inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnection
     return CONNECT_E_NOCONNECTION;
 }
 
+// CtrlClassFactory — creates instances of our ActiveX controls.
+//
+// When IE sees <object classid="clsid:{...}">, it calls CoCreateInstance with that CLSID.
+// COM looks up the class factory we registered (via CoRegisterClassObject in RegisterControl),
+// and calls CreateInstance() on it. We create a new ActiveXControl and return it.
+//
+// This is a pure in-memory registration — no registry entries are written. The registration
+// only lives as long as our process. When the process exits, it vanishes automatically.
+// CtrlClassFactory — creates ActiveXControl instances when IE encounters <object> tags.
+//
+// We register this with CoRegisterClassObject (in-memory, no registry!).
+// When IE sees <object classid="clsid:{our-guid}">, COM calls our CreateInstance(),
+// and we return a fresh ActiveXControl. This is how COM's "virtual constructor" works.
 class CtrlClassFactory : public IClassFactory {
     LONG m_ref; ControlReg_* m_reg;
 public:
@@ -1495,6 +1844,15 @@ public:
     STDMETHODIMP LockServer(BOOL) override { return S_OK; }
 };
 
+// SimpleDataObject — a minimal IDataObject that holds Unicode text.
+// Used for OLE drag & drop: call CreateTextDataObject("hello") to get an IDataObject,
+// then pass it to DoDragDrop(). The drop target can retrieve the text via GetData().
+// SimpleDataObject — a minimal IDataObject that holds Unicode text.
+// Used with DoDragDrop() to drag text out of a control. Usage:
+//   IDataObject* pDO = CreateTextDataObject(L"hello");
+//   DWORD effect;
+//   DoDragDrop(pDO, pDropSource, DROPEFFECT_COPY, &effect);
+//   pDO->Release();
 class SimpleDataObject : public IDataObject {
     LONG m_ref; std::wstring m_text;
 public:
@@ -1539,10 +1897,16 @@ public:
 };
 
 // ActiveX API implementations
+// These are the user-facing functions that wrap all the COM complexity above.
+
 inline std::wstring CLSIDToString(const CLSID& clsid) { wchar_t buf[64]; StringFromGUID2(clsid, buf, 64); return buf; }
 inline std::wstring GetControlClassId(hControlClass reg) { return reg ? L"clsid:" + CLSIDToString(reg->clsid) : L""; }
 inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSID_NULL; }
 
+// RegisterControl — the main entry point for creating a new control type.
+// This does NOT create a control instance — it registers a "class" that IE can
+// instantiate later when it encounters an <object> tag with the matching CLSID.
+// The CLSID is deterministic: same name always produces the same GUID.
 inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
     if (!name || !proc) return NULL;
     CLSID clsid = CLSIDFromName(name);
@@ -1636,17 +2000,27 @@ inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
     return id;
 }
 
+// FireEvent — sends an event from C++ to all connected JavaScript sinks.
+//
+// How COM events work:
+//   1. IE subscribes to events via IConnectionPoint::Advise(), giving us an IDispatch* "sink"
+//   2. When we want to fire an event, we call sink->Invoke(eventId, args)
+//   3. IE's script engine routes this to the JavaScript event handler
+//
+// IMPORTANT: args must be in COM reverse order (same as DISPPARAMS convention).
+//   args[0] = last parameter, args[argc-1] = first parameter.
+//   This matches the convention used for receiving method calls from JS.
+//
+// We take a snapshot of the sink list before iterating, with AddRef on each sink.
+// This prevents crashes if a sink calls Unadvise() on itself during the event callback
+// (which would modify the map while we're iterating it).
 inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
     if (!c || argc < 0) return;
     if (argc > 0 && !args) return;
-    // Invert parameter order (COM needs this!)
-    VARIANT* reversed = nullptr;
-    reversed = new VARIANT[argc];
-    for (int i = 0; i < argc; i++) reversed[i] = args[argc - 1 - i];
     DISPPARAMS dp = {};
-    dp.rgvarg = reversed;
+    dp.rgvarg = args;
     dp.cArgs = argc;
-    // Make a snapshot to ensure thread safty
+    // Snapshot sinks with AddRef to survive re-entrant Unadvise
     std::vector<IDispatch*> snapshot;
     snapshot.reserve(c->sinks.size());
     for (auto& kv : c->sinks) {
@@ -1656,7 +2030,6 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
         sink->Invoke(eventId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, NULL, NULL, NULL);
         sink->Release();
     }
-    delete[] reversed;
 }
 
 inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
