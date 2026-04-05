@@ -36,7 +36,7 @@
    * [x] Windows 8.1
    * [x] Windows 10 2004
    * [x] Windows 11 21H2
-   * [ ] Linux with WineHQ (Will be supported in near future)
+   * [ ] Linux 5+ with WineHQ (Will be supported in near future)
    * [ ] MacOS 10+ with CrossOver (Will be supported in near future)
    * [ ] Android 11+ with Winlator (Will be supported in near future)
    
