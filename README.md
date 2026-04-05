@@ -8,21 +8,46 @@
 
 ## Why use libTridentUI?
 
-1. Maximum compatibility ensurance
+1. Extremely lightweight
+   Modern browser based UI frameworks like Electron, CEF, and WebView2 are powerful but extremely heavy.
+
+   They ship a full Chromium browser with your app which would obviously occupy a huge amount of storage space and require modern OS versions.
+
+   If you're building a lightweight desktop utility that needs a rich UI but also needs to run on legacy systems, your options are very limited.
+
+   This is where **libTridentUI** can help you!
+   
+   Every copy of Windows since Windows 95 ships with mshtml.dll (the Trident/IE engine) that is capable of rendering HTML.
+
+   Not only it's extremely tiny, but it also ships together with Windows so you don't even have to install it additionally! It's already sitting there inside **EVERY** single Windows machine around the world just waiting to be called.
+
+   And that's exactly what **libTridentUI** is doing: An extremely lightweight **single header** library that calls mshtml.dll to render the UI of your software with zero DLL dependencies beyond what Windows already provides!
+
+2. Maximum compatibility ensurance
   libTridentUI is built on Microsoft Internet Explorer’s Trident engine, offering absolute top-tier compatibility!!!
 
-- [ ] Windows 2000 SP4 (Should also work in theory but never tested)
-- [x] Windows XP SP3
-- [x] Windows Vista SP1
-- [x] Windows 7 SP1
-- [x] Windows 8
-- [x] Windows 8.1
-- [x] Windows 10 2004
-- [x] Windows 11 21H2
+* [ ] Windows 2000 SP4
+* [x] Windows XP SP3
+* [x] Windows Vista SP1
+* [x] Windows 7 SP1
+* [x] Windows 8
+* [x] Windows 8.1
+* [x] Windows 10 2004
+* [x] Windows 11 21H2
+* [ ] Linux with WineHQ (Will be supported in near future)
+* [ ] MacOS 10+ with CrossOver (Will be supported in near future)
+* [ ] Android 11+ with Winlator (Will be supported in near future)
 
-  You can now make programs that works across all versions of Windows spanning a period of 20 years! Isn't that beautiful?
+  You can now create browser based programs that works across all versions of Windows spanning a period of 20 years! Isn't that beautiful?
 
-2. Easy to use
-  libTridentUI still provides you the most easy to use and modern API set despite being based on the Trident engine.
+3. Easy to use
+   **libTridentUI** wrapped all of the complex COM interfaces needed to host mshtml.dll into a clean and flat C-Style API that you can quickly learn in just a few hours!
+   
+   No need to create any class or struct, no need to implement any COM interface yourself, **libTridentUI** has already done all of the heavy lifting for you.
 
-  When you use libTridentUI, it feels like you're instead using Edge WebView 2! It's really THAT clean!
+4. Multifunctional
+   Other libraries might only provide you a web browser window that can only run the slow as hell JavaScript and nothing else, but **libTridentUI** provides you a fully working IDispatch implementation that allows you to call C++ functions from JS and call JS functions from C++ with zero effort!
+
+   In addition, **libTridentUI** also supports embedding custom ActiveX controls into your webpage! Instead of the 0.1 fps JS Canvas, you now have access to a GDI compatible hWnd that you can render complex graphics with lightning speed using C++ via GDI Plus, DirectX, or OpenGL.
+   
+   The ActiveX component registration is done completely in RAM, no registry writes, no uninstallation leftover!
