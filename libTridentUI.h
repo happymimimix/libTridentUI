@@ -1,6 +1,6 @@
 #pragma once
 /*
-libTridentUI - v0.2.5 Beta
+libTridentUI - v0.2.6 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by:
@@ -39,7 +39,7 @@ The key interfaces IE GIVES US (that we call into):
 	IOleObject			- "Activate me, close me, get my status"
 	IOleInPlaceObject	- "Here's how to resize and position me"
 	IHTMLDocument2/3	- "Here's the DOM of the loaded page"
-	
+
 The JS <-> C++ bridge works through "window.external":
 	When JavaScript calls window.external.MyFunc(1, 2), IE looks up our IDocHostUIHandler,
 	calls GetExternal() to get an IDispatch, calls GetIDsOfNames("MyFunc") to get a numeric ID,
@@ -115,14 +115,14 @@ typedef ControlReg_* hControlClass;
 using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
 using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
 
-typedef LRESULT (*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-typedef LRESULT (*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
-typedef HRESULT (*PropertyGetter)(hControl c, VARIANT* result);
-typedef HRESULT (*PropertySetter)(hControl c, VARIANT value);
-typedef HRESULT (*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT (*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT (*DropLeaveCallback)(hControl c);
-typedef HRESULT (*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef LRESULT(*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
+typedef LRESULT(*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
+typedef HRESULT(*PropertyGetter)(hControl c, VARIANT* result);
+typedef HRESULT(*PropertySetter)(hControl c, VARIANT value);
+typedef HRESULT(*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropLeaveCallback)(hControl c);
+typedef HRESULT(*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 
 inline void TridentInit();
 inline void TridentShutdown();
@@ -207,11 +207,11 @@ class ExternalDispatch : public IDispatch {
 	DISPID m_nextId = INT32_MAX;
 	std::map<std::wstring, DISPID> m_name2id = {};
 	std::map<DISPID, MethodCallback> m_id2func = {};
-	
+
 public:
-	ExternalDispatch()  { InitializeCriticalSection(&m_cs); }
+	ExternalDispatch() { InitializeCriticalSection(&m_cs); }
 	~ExternalDispatch() { DeleteCriticalSection(&m_cs); }
-	
+
 	void Bind(const wchar_t* name, MethodCallback cb) {
 		EnterCriticalSection(&m_cs);
 		if (m_name2id.find(name) != m_name2id.end()) {
@@ -242,7 +242,7 @@ public:
 
 	STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
 	STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
-	
+
 	// GetIDsOfNames - IE calls this to convert "Add" -> numeric DISPID.
 	// When JS does window.external.Add(1,2), IE first asks us "what's the ID for 'Add'?"
 	STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
@@ -252,7 +252,8 @@ public:
 			auto it = m_name2id.find(names[i]);
 			if (it != m_name2id.end()) {
 				ids[i] = it->second;
-			} else {
+			}
+			else {
 				ids[i] = DISPID_UNKNOWN;
 				hr = DISP_E_UNKNOWNNAME;
 			}
@@ -260,13 +261,12 @@ public:
 		LeaveCriticalSection(&m_cs);
 		return hr;
 	}
-	
+
 	// Invoke - IE calls this with the DISPID from GetIDsOfNames + the JS arguments.
 	// We look up the C++ callback and call it. Note: we copy the callback THEN unlock
 	// the critical section BEFORE calling the user's code. This prevents deadlocks if
 	// the user's callback tries to bind more functions.
-	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp,
-						VARIANT* res, EXCEPINFO*, UINT*) override {
+	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
 		if (!(wf & DISPATCH_METHOD)) return DISP_E_MEMBERNOTFOUND;
 		EnterCriticalSection(&m_cs);
 		auto it = m_id2func.find(id);
@@ -321,21 +321,21 @@ class OleSite :
 {
 public:
 	ExternalDispatch ext;
-	
-	OleSite() : m_hwnd(NULL), m_pUnkSite(NULL), m_pView(NULL), m_pInPlace(NULL), m_pOle(NULL), m_pBrowser(NULL), m_cookie(NULL) 
+
+	OleSite() : m_hwnd(NULL), m_pUnkSite(NULL), m_pView(NULL), m_pInPlace(NULL), m_pOle(NULL), m_pBrowser(NULL), m_cookie(NULL)
 	{
 		InterlockedIncrement(&m_ref);
 	}
-	
+
 	~OleSite() {
 		Destroy();
 		if (m_pUnkSite) m_pUnkSite->Release();
 		if (m_pView) m_pView->Release();
 		if (m_pInPlace) m_pInPlace->Release();
 	}
-	
+
 	IWebBrowser2* GetBrowser() { return m_pBrowser; }
-	
+
 	// SetupUIHandler - hooks our IDocHostUIHandler into the loaded document.
 	// We have to do this AFTER the page loads because the document object changes on
 	// every navigation. The ICustomDoc interface is MSHTML's way of saying "let me swap
@@ -408,7 +408,7 @@ public:
 		ConnectEvents(TRUE);
 		return true;
 	}
-	
+
 	// Destroy - disconnects everything and releases COM references.
 	// This must be called before the host window is destroyed, because IE's child windows
 	// are parented to our HWND. Calling Close(OLECLOSE_NOSAVE) tells IE to deactivate
@@ -501,7 +501,7 @@ public:
 		return OnInPlaceActivateEx(&dummy, 0);
 	}
 	STDMETHODIMP OnUIActivate() override { return S_OK; }
-	
+
 	// GetWindowContext - IE asks "give me a frame, a UI window, and the rectangles
 	// I can draw in". We provide a dummy InlineFrame (which is basically a no-op
 	// implementation of IOleInPlaceFrame), and tell IE it can use our entire client area.
@@ -581,12 +581,12 @@ public:
 		return S_OK;
 	}
 	STDMETHODIMP ShowUI(DWORD, IOleInPlaceActiveObject*, IOleCommandTarget*, IOleInPlaceFrame*, IOleInPlaceUIWindow*) override { return S_FALSE; }
-	STDMETHODIMP HideUI() override { return E_NOTIMPL; }
-	STDMETHODIMP UpdateUI() override { return E_NOTIMPL; }
-	STDMETHODIMP EnableModeless(BOOL) override { return E_NOTIMPL; }
-	STDMETHODIMP OnDocWindowActivate(BOOL) override { return E_NOTIMPL; }
-	STDMETHODIMP OnFrameWindowActivate(BOOL) override { return E_NOTIMPL; }
-	STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return E_NOTIMPL; }
+	STDMETHODIMP HideUI() override { return S_OK; }
+	STDMETHODIMP UpdateUI() override { return S_OK; }
+	STDMETHODIMP EnableModeless(BOOL) override { return S_OK; }
+	STDMETHODIMP OnDocWindowActivate(BOOL) override { return S_OK; }
+	STDMETHODIMP OnFrameWindowActivate(BOOL) override { return S_OK; }
+	STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return S_FALSE; }
 	STDMETHODIMP TranslateAccelerator(LPMSG, const GUID*, DWORD) override { return S_FALSE; }
 	STDMETHODIMP GetOptionKeyPath(LPOLESTR*, DWORD) override { return S_FALSE; }
 	STDMETHODIMP GetDropTarget(IDropTarget*, IDropTarget**) override { return E_NOTIMPL; }
@@ -601,8 +601,8 @@ public:
 		ext.AddRef();
 		return S_OK;
 	}
-	STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { return S_FALSE; }
-	STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { return S_FALSE; }
+	STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR*) override { return E_NOTIMPL; }
+	STDMETHODIMP FilterDataObject(IDataObject*, IDataObject**) override { return E_NOTIMPL; }
 
 	// ---- IDispatch (for browser events) ----
 	// We subscribe to DWebBrowserEvents2 to know when navigation completes.
@@ -631,7 +631,8 @@ private:
 		if (SUCCEEDED(cpc->FindConnectionPoint(DIID_DWebBrowserEvents2, &cp))) {
 			if (advise) {
 				cp->Advise(static_cast<IDispatch*>(this), &m_cookie);
-			} else if (m_cookie) {
+			}
+			else if (m_cookie) {
 				cp->Unadvise(m_cookie);
 				m_cookie = NULL;
 			}
@@ -643,11 +644,11 @@ private:
 		ULONG m_ref = 0;
 		HWND m_hwnd = NULL;
 	public:
-		InlineFrame(HWND h) :  m_hwnd(h) { InterlockedIncrement(&m_ref); }
+		InlineFrame(HWND h) : m_hwnd(h) { InterlockedIncrement(&m_ref); }
 		STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
 			if (riid == IID_IUnknown || riid == IID_IOleInPlaceFrame ||
 				riid == IID_IOleWindow || riid == IID_IOleInPlaceUIWindow)
-				{
+			{
 				*ppv = static_cast<IOleInPlaceFrame*>(this);
 				AddRef();
 				return S_OK;
@@ -682,8 +683,13 @@ private:
 		~InlineEnum() { m_ptr->Release(); }
 		STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
 			if (riid == IID_IUnknown || riid == IID_IEnumUnknown)
-				{ *ppv = static_cast<IEnumUnknown*>(this); AddRef(); return S_OK; }
-			*ppv = NULL; return E_NOINTERFACE;
+			{
+				*ppv = static_cast<IEnumUnknown*>(this);
+				AddRef();
+				return S_OK;
+			}
+			*ppv = NULL;
+			return E_NOINTERFACE;
 		}
 		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
 		STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
@@ -737,21 +743,15 @@ struct TridentWindowData_ {
 //  	destroy the OLE site, remove from the linked list, and delete h.
 //  	After this point, the hTrident handle is INVALID - using it is undefined behavior.
 inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-	hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-	
+	hTrident trdt = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (msg == WM_NCCREATE) {
-		h = (hTrident)((CREATESTRUCT*)lp)->lpCreateParams;
-		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)h);
-		h->hwnd = hwnd;
+		trdt = (hTrident)((CREATESTRUCT*)lp)->lpCreateParams;
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)trdt);
+		trdt->hwnd = hwnd;
 	}
-	
-	if (h) {
-		if (msg == WM_SIZE && h->site) {
-			h->site->Resize(LOWORD(lp), HIWORD(lp));
-		}
-		LRESULT userProcResult = 0;
-		if (h->userProc) {
-			userProcResult = h->userProc(h, hwnd, msg, wp, lp);
+	if (trdt) {
+		if (msg == WM_SIZE && trdt->site) {
+			trdt->site->Resize(LOWORD(lp), HIWORD(lp));
 		}
 		if (msg == WM_CLOSE) {
 			DestroyWindow(hwnd);
@@ -759,21 +759,23 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
 		}
 		if (msg == WM_NCDESTROY) {
 			SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
-			h->hwnd = NULL;
-			h->alive = false;
-			if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
+			trdt->hwnd = NULL;
+			trdt->alive = false;
+			if (trdt->site) { trdt->site->Destroy(); trdt->site->Release(); trdt->site = NULL; }
 			// Remove from doubly-linked list (O(1))
-			if (h->prev) h->prev->next = h->next;
-			else g_trident_head = h->next;
-			if (h->next) h->next->prev = h->prev;
-			delete h;
+			if (trdt->prev) trdt->prev->next = trdt->next;
+			else g_trident_head = trdt->next;
+			if (trdt->next) trdt->next->prev = trdt->prev;
+			delete trdt;
 			return 0;
 		}
-		if (h->userProc) {
-			return userProcResult;
+		if (trdt->userProc) {
+			bool implemented = false;
+			LRESULT r = trdt->userProc(trdt, hwnd, msg, wp, lp, &implemented);
+			if (implemented) return r;
 		}
 	}
-	
+
 	return DefWindowProc(hwnd, msg, wp, lp);
 }
 
@@ -903,7 +905,8 @@ inline void CloseTridentWindow(hTrident h) {
 	if (!h || !h->alive) return;
 	if (h->hwnd) {
 		DestroyWindow(h->hwnd);
-	} else {
+	}
+	else {
 		// This shouldn't happen normally but we still handle it here anyways.
 		h->alive = false;
 		if (h->site) { h->site->Destroy(); h->site->Release(); h->site = NULL; }
@@ -970,9 +973,9 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
 	if (!b) return;
 	b->AddRef(); // prevent browser from being freed during pump
 	HWND hwnd = GetTridentHWND(h); // stack copy - safe even if h is deleted
-	
+
 	NavigateTo(h, L"about:blank");
-	
+
 	// Pump messages until about:blank is fully loaded.
 	// We can't touch h during this loop - it might get deleted by WM_NCDESTROY!
 	READYSTATE st;
@@ -985,18 +988,18 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
 		}
 		_mm_pause();
 	}
-	
+
 	// Re-acquire h from the window. If WM_NCDESTROY fired, GWLP_USERDATA is 0.
 	h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	if (!h || !IsWindow(hwnd)) { b->Release(); return; }
 	if (h->site) h->site->SetupUIHandler();
-	
+
 	// Now write the HTML into the blank document using document.write().
 	// This is the same as doing document.write() from JavaScript.
 	IDispatch* d = NULL;
 	b->get_Document(&d);
 	if (!d) { b->Release(); return; }
-	
+
 	IHTMLDocument2* doc = NULL;
 	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
 		// document.write() expects a SAFEARRAY of VARIANTs containing BSTRs.
@@ -1019,11 +1022,11 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
 inline void ExecScript(hTrident h, const wchar_t* js) {
 	IWebBrowser2* b = GetTridentBrowser(h);
 	if (!b) return;
-	
+
 	IDispatch* d = NULL;
 	b->get_Document(&d);
 	if (!d) return;
-	
+
 	IHTMLDocument2* doc = NULL;
 	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
 		IHTMLWindow2* w = NULL;
@@ -1046,11 +1049,11 @@ inline void ExecScript(hTrident h, const wchar_t* js) {
 inline hElement GetElement(hTrident h, const wchar_t* id) {
 	IWebBrowser2* b = GetTridentBrowser(h);
 	if (!b) return NULL;
-	
+
 	IDispatch* d = NULL;
 	b->get_Document(&d);
 	if (!d) return NULL;
-	
+
 	IHTMLElement* elem = NULL;
 	IHTMLDocument3* doc3 = NULL;
 	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument3, (void**)&doc3))) {
@@ -1214,17 +1217,17 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 inline CLSID CLSIDFromName(const wchar_t* name) {
 	CLSID result = {};
 	if (!name) return result;
-	
+
 	HCRYPTPROV hProv = NULL;
 	HCRYPTHASH hHash = NULL;
-	
+
 	CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT);
 	CryptCreateHash(hProv, CALG_MD5, 0, 0, &hHash);
 	DWORD dwDataLen = (DWORD)(wcslen(name) * sizeof(wchar_t));
 	CryptHashData(hHash, (const BYTE*)name, dwDataLen, 0);
 	DWORD dwHashLen = sizeof(CLSID);
 	CryptGetHashParam(hHash, HP_HASHVAL, reinterpret_cast<unsigned char*>(&result), &dwHashLen, 0);
-	
+
 	CryptDestroyHash(hHash);
 	CryptReleaseContext(hProv, 0);
 	return result;
@@ -1271,7 +1274,7 @@ class EventTypeInfo : public ITypeInfo {
 	std::vector<DISPID> m_orderedIds = {}; // Ordered list for GetFuncDesc by index
 	std::map<DISPID, WORD> m_id2cParams = {}; // Parameter count per event (for GetFuncDesc)
 public:
-	EventTypeInfo(const CLSID& clsid) : m_clsid(clsid){
+	EventTypeInfo(const CLSID& clsid) : m_clsid(clsid) {
 		InterlockedIncrement(&m_ref);
 		InitializeCriticalSection(&m_cs);
 	}
@@ -1395,7 +1398,8 @@ public:
 			auto it = m_name2id.find(names[i]);
 			if (it != m_name2id.end()) {
 				ids[i] = it->second;
-			} else {
+			}
+			else {
 				ids[i] = MEMBERID_NIL;
 				hr = DISP_E_UNKNOWNNAME;
 			}
@@ -1731,7 +1735,8 @@ public:
 		if (!p) return E_POINTER;
 		if (m_inst->extent.cx > 0 && m_inst->extent.cy > 0) {
 			*p = m_inst->extent;
-		} else {
+		}
+		else {
 			p->cx = MulDiv(m_inst->rcPos.right - m_inst->rcPos.left, 2540, 96);
 			p->cy = MulDiv(m_inst->rcPos.bottom - m_inst->rcPos.top, 2540, 96);
 		}
@@ -1876,7 +1881,8 @@ public:
 			auto it = m_inst->reg->name2id.find(names[i]);
 			if (it != m_inst->reg->name2id.end()) {
 				ids[i] = it->second;
-			} else {
+			}
+			else {
 				ids[i] = DISPID_UNKNOWN;
 				hr = DISP_E_UNKNOWNNAME;
 			}
@@ -1954,12 +1960,15 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	else {
 		ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	}
-	if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc) {
-		LRESULT r = ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp);
-		if (msg == WM_NCDESTROY) SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
-		return r;
+	if (msg == WM_NCDESTROY) {
+		SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+		return 0;
 	}
-	if (msg == WM_NCDESTROY) SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
+	if (ctrl && ctrl->m_inst && ctrl->m_inst->reg && ctrl->m_inst->reg->wndProc) {
+		bool implemented = false;
+		LRESULT r = ctrl->m_inst->reg->wndProc(ctrl->m_inst, hwnd, msg, wp, lp, &implemented);
+		if (implemented) return r;
+	}
 	return DefWindowProc(hwnd, msg, wp, lp);
 }
 
