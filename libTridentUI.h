@@ -127,10 +127,12 @@ typedef HRESULT (*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyS
 
 inline void TridentInit();
 inline void TridentShutdown();
+inline bool IsTridentHostWindow(HWND hwnd);
+inline hTrident FindNearestTridentHostFromHWND(HWND hwnd);
 inline void TridentRunMessageLoop();
 inline void TridentProcessMessage(MSG& msg, bool* is_eaten);
 
-inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW);
+inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW, DWORD styleEX = NULL);
 inline void CloseTridentWindow(hTrident h);
 inline HWND GetTridentHWND(hTrident h);
 inline IWebBrowser2* GetTridentBrowser(hTrident h);
@@ -724,6 +726,7 @@ struct TridentWindowData_ {
     TridentWindowData_* prev = nullptr; // Previous node in the linked list
     TridentWindowData_* next = nullptr; // Next node in the linked list
 };
+
 // TridentHostWndProc - the Win32 window procedure for the host window.
 //
 // Message flow:
@@ -747,8 +750,9 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
         if (msg == WM_SIZE && h->site) {
             h->site->Resize(LOWORD(lp), HIWORD(lp));
         }
+        LRESULT userProcResult = 0;
         if (h->userProc) {
-            LRESULT r = h->userProc(h, hwnd, msg, wp, lp);
+            userProcResult = h->userProc(h, hwnd, msg, wp, lp);
         }
         if (msg == WM_CLOSE) {
             DestroyWindow(hwnd);
@@ -765,6 +769,9 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
             if (h->next) h->next->prev = h->prev;
             delete h;
             return 0;
+        }
+        if (h->userProc) {
+            return userProcResult;
         }
     }
     
@@ -789,12 +796,35 @@ inline void TridentShutdown() {
     OleUninitialize();
 }
 
+// Returns true if hwnd is one of our libTridentUI host windows.
+// We verify both the window class name and that GWLP_USERDATA points to a live hTrident.
+inline bool IsTridentHostWindow(HWND hwnd) {
+    if (!hwnd) return false;
+    wchar_t cls[LONG_MAX_PATH] = {};
+    if (!GetClassNameW(hwnd, cls, LONG_MAX_PATH)) return false;
+    if (lstrcmpW(cls, g_trident_wndclass) != 0) return false;
+    hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    return h && h->alive && h->hwnd == hwnd;
+}
+
+// Walks upward from an arbitrary HWND and returns the nearest libTridentUI host.
+// This is the correct rule for nested Trident windows: route to the closest host,
+// not to the root window and not to every ancestor host that happens to contain it.
+inline hTrident FindNearestTridentHostFromHWND(HWND hwnd) {
+    for (HWND cur = hwnd; cur; cur = GetParent(cur)) {
+        if (IsTridentHostWindow(cur)) {
+            return (hTrident)GetWindowLongPtr(cur, GWLP_USERDATA);
+        }
+    }
+    return NULL;
+}
+
 // TridentRunMessageLoop - standard Win32 message loop with IE keyboard handling.
 // IE needs to process Tab, Enter, Ctrl+C, etc. through its own TranslateAccelerator.
 // Without this, keyboard input in the browser would be broken (you couldn't tab
-// between form fields, copy text, etc.). We check IsChild to make sure we only
-// send keystrokes to the window that actually owns the focused control - otherwise
-// a background window could steal keys from the foreground window.
+// between form fields, copy text, etc.). We route each message to the NEAREST
+// libTridentUI host that owns the target HWND. This keeps nested Trident windows
+// from stealing accelerators from one another.
 inline void TridentRunMessageLoop() {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0) > 0) {
@@ -836,29 +866,23 @@ inline void TridentRunMessageLoop() {
 inline void TridentProcessMessage(MSG& msg, bool* is_eaten) {
     if (!is_eaten) return;
     *is_eaten = false; // Initialize *eaten to always be false at the beginning.
-    for (TridentWindowData_* CurrentPtr = g_trident_head; CurrentPtr;) {
-        TridentWindowData_* NextPtr = CurrentPtr->next;
-        if (CurrentPtr->alive && CurrentPtr->site && CurrentPtr->hwnd &&
-            (msg.hwnd == CurrentPtr->hwnd || IsChild(CurrentPtr->hwnd, msg.hwnd))) {
-            IWebBrowser2* BrowserPtr = CurrentPtr->site->GetBrowser();
-            if (BrowserPtr) {
-                BrowserPtr->AddRef();
-                IOleInPlaceActiveObject* ObjectPtr = NULL;
-                if (SUCCEEDED(BrowserPtr->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ObjectPtr))) {
-                    *is_eaten = (ObjectPtr->TranslateAccelerator(&msg) == S_OK);
-                    ObjectPtr->Release();
-                }
-                BrowserPtr->Release();
-            }
-        }
-        if (*is_eaten) return;
-        CurrentPtr = NextPtr;
+    if (!msg.hwnd) return;
+    hTrident host = FindNearestTridentHostFromHWND(msg.hwnd);
+    if (!host || !host->alive || !host->site || !host->hwnd) return;
+    IWebBrowser2* BrowserPtr = host->site->GetBrowser();
+    if (!BrowserPtr) return;
+    BrowserPtr->AddRef();
+    IOleInPlaceActiveObject* ObjectPtr = NULL;
+    if (SUCCEEDED(BrowserPtr->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ObjectPtr))) {
+        *is_eaten = (ObjectPtr->TranslateAccelerator(&msg) == S_OK);
+        ObjectPtr->Release();
     }
+    BrowserPtr->Release();
 }
 
-inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner, DWORD style) {
+inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner, DWORD style, DWORD styleEX) {
     TridentWindowData_* d = new TridentWindowData_();
-    CreateWindowExW(0, g_trident_wndclass, title, style, x, y, w, h, owner, NULL, GetModuleHandle(NULL), d);
+    CreateWindowExW(styleEX, g_trident_wndclass, title, style, x, y, w, h, owner, NULL, GetModuleHandle(NULL), d);
     if (!d->hwnd) { delete d; return NULL; }
     d->site = new OleSite();
     if (!d->site->Create(d->hwnd)) {
@@ -2236,9 +2260,8 @@ inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args) {
 }
 
 inline hTrident FindHostFromControl(hControl c) {
-    HWND hHost = GetAncestor(GetControlHWND(c), GA_ROOT);
-    hTrident h = (hTrident)GetWindowLongPtr(hHost, GWLP_USERDATA);
-    return h;
+    if (!c) return NULL;
+    return FindNearestTridentHostFromHWND(GetControlHWND(c));
 }
 
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter, DropOverCallback onDragOver, DropLeaveCallback onDragLeave) {
