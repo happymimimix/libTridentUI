@@ -102,7 +102,7 @@ typedef IHTMLElement* hElement;
 //   VARIANT args[2];
 //   args[0].vt = VT_BSTR; args[0].bstrVal = SysAllocString(L"hello");  // last arg first
 //   args[1].vt = VT_I4;   args[1].lVal = 42;                           // first arg last
-//   FireEvent(c, evtId, args, 2);
+//   FireEvent(c, evtId, args);
 
 
 struct ControlInstance_;
@@ -170,9 +170,11 @@ inline std::wstring CLSIDToString(const CLSID& clsid);
 inline std::wstring GetControlClassId(hControlClass reg);
 inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
 inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
-inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name);
-inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL, int argc = 0);
-inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL, int argc = 0);
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, int paramCount = 0);
+inline int GetEventExpectedArgc(hControlClass reg, DISPID eventId);
+inline int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name);
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL);
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL);
 inline HWND GetControlHWND(hControl c);
 inline void* GetControlUserData(hControl c);
 inline void SetControlUserData(hControl c, void* data);
@@ -1214,14 +1216,15 @@ class EventTypeInfo : public ITypeInfo {
     std::map<std::wstring, DISPID> m_name2id;
     std::map<DISPID, std::wstring> m_id2name; // Reverse lookup for GetNames
     std::vector<DISPID> m_orderedIds; // Ordered list for GetFuncDesc by index
+    std::map<DISPID, WORD> m_id2cParams; // Parameter count per event (for GetFuncDesc)
 public:
     EventTypeInfo(const CLSID& clsid) : m_ref(1), m_clsid(clsid), m_nextId(INT32_MAX) {
         InitializeCriticalSection(&m_cs);
     }
     ~EventTypeInfo() { DeleteCriticalSection(&m_cs); }
 
-    // Register a new event name, returns its DISPID. Idempotent for same name.
-    DISPID RegisterEvent(const wchar_t* name) {
+    // Register a new event name with its parameter count. Returns DISPID. Idempotent for same name.
+    DISPID RegisterEvent(const wchar_t* name, int paramCount = 0) {
         EnterCriticalSection(&m_cs);
         auto it = m_name2id.find(name);
         if (it != m_name2id.end()) { DISPID d = it->second; LeaveCriticalSection(&m_cs); return d; }
@@ -1230,6 +1233,7 @@ public:
         m_name2id[name] = id;
         m_id2name[id] = name;
         m_orderedIds.push_back(id);
+        m_id2cParams[id] = (WORD)(paramCount > 0 ? paramCount : 0);
         LeaveCriticalSection(&m_cs);
         return id;
     }
@@ -1241,6 +1245,15 @@ public:
         DISPID id = (it != m_name2id.end()) ? it->second : DISPID_UNKNOWN;
         LeaveCriticalSection(&m_cs);
         return id;
+    }
+
+    // Get the registered parameter count for an event. Returns 0 if not found.
+    int GetParamCount(DISPID id) {
+        EnterCriticalSection(&m_cs);
+        auto it = m_id2cParams.find(id);
+        int n = (it != m_id2cParams.end()) ? it->second : 0;
+        LeaveCriticalSection(&m_cs);
+        return n;
     }
 
     // ---- IUnknown ----
@@ -1271,13 +1284,14 @@ public:
     }
     STDMETHODIMP_(void) ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); }
 
-    // GetFuncDesc - describe event N as a dispinterface method.
-    // IE might call this to enumerate all events on the source interface.
+    // GetFuncDesc - describe event N as a dispinterface method with its parameters.
+    // IE uses cParams and lprgelemdescParam to know how many args to pass to JS handlers.
     STDMETHODIMP GetFuncDesc(UINT index, FUNCDESC** ppDesc) override {
         if (!ppDesc) return E_POINTER;
         EnterCriticalSection(&m_cs);
         if (index >= m_orderedIds.size()) { LeaveCriticalSection(&m_cs); return TYPE_E_ELEMENTNOTFOUND; }
         DISPID id = m_orderedIds[index];
+        WORD cParams = m_id2cParams.count(id) ? m_id2cParams[id] : 0;
         LeaveCriticalSection(&m_cs);
         FUNCDESC* fd = (FUNCDESC*)CoTaskMemAlloc(sizeof(FUNCDESC));
         if (!fd) return E_OUTOFMEMORY;
@@ -1287,12 +1301,23 @@ public:
         fd->invkind = INVOKE_FUNC;
         fd->callconv = CC_STDCALL;
         fd->elemdescFunc.tdesc.vt = VT_VOID;
-        fd->cParams = 0;
-        fd->wFuncFlags = 0;
+        fd->cParams = cParams;
+        if (cParams > 0) {
+            fd->lprgelemdescParam = (ELEMDESC*)CoTaskMemAlloc(cParams * sizeof(ELEMDESC));
+            if (!fd->lprgelemdescParam) { CoTaskMemFree(fd); return E_OUTOFMEMORY; }
+            memset(fd->lprgelemdescParam, 0, cParams * sizeof(ELEMDESC));
+            for (WORD i = 0; i < cParams; i++)
+                fd->lprgelemdescParam[i].tdesc.vt = VT_VARIANT; // Accept any type
+        }
         *ppDesc = fd;
         return S_OK;
     }
-    STDMETHODIMP_(void) ReleaseFuncDesc(FUNCDESC* p) override { if (p) CoTaskMemFree(p); }
+    STDMETHODIMP_(void) ReleaseFuncDesc(FUNCDESC* p) override {
+        if (p) {
+            if (p->lprgelemdescParam) CoTaskMemFree(p->lprgelemdescParam);
+            CoTaskMemFree(p);
+        }
+    }
 
     // GetNames - reverse-lookup DISPID -> event name.
     STDMETHODIMP GetNames(MEMBERID id, BSTR* names, UINT maxNames, UINT* pcNames) override {
@@ -1865,6 +1890,7 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_NCCREATE) {
         ctrl = (ActiveXControl*)((CREATESTRUCT*)lp)->lpCreateParams;
         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)ctrl);
+        ctrl->m_inst->hwnd = hwnd; // Set early so WM_CREATE handlers can use GetControlHWND/EnableDragDrop
     }
     else {
         ctrl = (ActiveXControl*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -2123,9 +2149,21 @@ inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGe
     LeaveCriticalSection(&reg->cs);
 }
 
-inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, int paramCount) {
     if (!reg || !reg->eventInfo) return DISPID_UNKNOWN;
-    return reg->eventInfo->RegisterEvent(name);
+    return reg->eventInfo->RegisterEvent(name, paramCount);
+}
+
+inline int GetEventExpectedArgc(hControlClass reg, DISPID eventId) {
+    if (!reg || !reg->eventInfo) return 0;
+    return reg->eventInfo->GetParamCount(eventId);
+}
+
+inline int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name) {
+    if (!reg || !reg->eventInfo || !name) return 0;
+    DISPID id = reg->eventInfo->GetEventId(name);
+    if (id == DISPID_UNKNOWN) return 0;
+    return reg->eventInfo->GetParamCount(id);
 }
 
 // FireEvent - sends an event from C++ to all connected JavaScript sinks.
@@ -2137,13 +2175,14 @@ inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
 //
 // IMPORTANT: args must be in COM reverse order (same as DISPPARAMS convention).
 //   args[0] = last parameter, args[argc-1] = first parameter.
-//   This matches the convention used for receiving method calls from JS.
+//   The parameter count is automaticaly looked up from the EventTypeInfo registry (set by RegisterEvent).
 //
 // We take a snapshot of the sink list before iterating, with AddRef on each sink.
 // This prevents crashes if a sink calls Unadvise() on itself during the event callback
 // (which would modify the map while we're iterating it).
-inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
-    if (!c || argc < 0) return;
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args) {
+    if (!c || !c->reg || !c->reg->eventInfo) return;
+    int argc = c->reg->eventInfo->GetParamCount(eventId);
     if (argc > 0 && !args) return;
     DISPPARAMS dp = {};
     dp.rgvarg = args;
@@ -2160,11 +2199,11 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
     }
 }
 
-inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args) {
     if (!c || !c->reg || !c->reg->eventInfo) return;
     DISPID id = c->reg->eventInfo->GetEventId(name);
     if (id == DISPID_UNKNOWN) return;
-    FireEvent(c, id, args, argc);
+    FireEvent(c, id, args);
 }
 
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter, DropOverCallback onDragOver, DropLeaveCallback onDragLeave) {
