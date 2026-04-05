@@ -70,6 +70,7 @@ The ActiveX control creation works the other way around:
 #include <objsafe.h>
 #include <vector>
 #include <algorithm>
+#include <intrin.h>
 #define LONG_MAX_PATH 0x0FFF
 
 #pragma comment(lib, "ole32.lib")
