@@ -1,6 +1,6 @@
 #pragma once
 /*
-libTridentUI - v0.2.6 Beta
+libTridentUI - v0.3.1 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by:
@@ -84,10 +84,13 @@ The ActiveX control creation works the other way around:
 struct TridentWindowData_;
 typedef TridentWindowData_* hTrident;
 typedef IHTMLElement* hElement;
+typedef IHTMLDocument2* hDocument;
+typedef IHTMLDocument3* hDocument2;
 struct ControlInstance_;
 typedef ControlInstance_* hControl;
 struct ControlReg_;
 typedef ControlReg_* hControlClass;
+enum InsertLocation {BEFORE_BEGIN,AFTER_BEGIN,BEFORE_END,AFTER_END};
 
 // Callback signatures - both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
 // 
@@ -138,9 +141,12 @@ inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb);
 inline void NavigateTo(hTrident h, const wchar_t* url);
 inline void NavigateToRes(hTrident h, const wchar_t* resName);
 inline void NavigateToHTML(hTrident h, const wchar_t* html);
-inline void ExecScript(hTrident h, const wchar_t* js);
+inline hDocument GetDocument(hTrident h);
+inline hDocument2 GetDocument2(hDocument h);
+inline VARIANT EvalJS(hTrident h, const wchar_t* js);
+inline VARIANT CallJS(hTrident h, const wchar_t* jsfunc, VARIANT* args = NULL, int argc = 0);
+inline void RunJS(hTrident h, const wchar_t* js);
 inline hElement GetElement(hTrident h, const wchar_t* id);
-inline void ReleaseElement(hElement e);
 
 inline void SetHTML(hElement e, const wchar_t* html);
 inline std::wstring GetHTML(hElement e);
@@ -155,6 +161,9 @@ inline void SetElementHTML(hTrident h, const wchar_t* id, const wchar_t* html);
 inline std::wstring GetElementHTML(hTrident h, const wchar_t* id);
 inline void SetElementText(hTrident h, const wchar_t* id, const wchar_t* text);
 inline std::wstring GetElementText(hTrident h, const wchar_t* id);
+inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, const wchar_t* html);
+inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html);
+inline void RemoveElement(hTrident h, const wchar_t* id);
 inline void SetWndProc(hTrident h, TridentWndProc proc);
 inline void SetUserData(hTrident h, void* data);
 inline void* GetUserData(hTrident h);
@@ -567,7 +576,7 @@ public:
 	// This is our main UI customization point. IE calls these to ask how we want
 	// the browser to look and behave.
 
-	// ShowContextMenu - return S_FALSE to show the default IE menu to appear.
+	// ShowContextMenu - return S_FALSE to show the default IE menu.
 	// Return S_OK if you want to BLOCK the default right-click menu.
 	STDMETHODIMP ShowContextMenu(DWORD, POINT*, IUnknown*, IDispatch*) override { return S_FALSE; }
 
@@ -995,79 +1004,137 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
 	if (h->site) h->site->SetupUIHandler();
 
 	// Now write the HTML into the blank document using document.write().
-	// This is the same as doing document.write() from JavaScript.
-	IDispatch* d = NULL;
-	b->get_Document(&d);
+	hDocument d = GetDocument(h);
 	if (!d) { b->Release(); return; }
-
-	IHTMLDocument2* doc = NULL;
-	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
-		// document.write() expects a SAFEARRAY of VARIANTs containing BSTRs.
-		// Yeah, it's a lot of boilerplate for what's essentially one function call.
-		SAFEARRAY* sa = SafeArrayCreateVector(VT_VARIANT, 0, 1);
-		VARIANT* pv;
-		SafeArrayAccessData(sa, (void**)&pv);
-		pv->vt = VT_BSTR;
-		pv->bstrVal = SysAllocString(html);
-		SafeArrayUnaccessData(sa);
-		doc->write(sa);
-		doc->close(); // Finalize the document - like closing a file after writing
-		SafeArrayDestroy(sa);
-		doc->Release();
-	}
+	// document.write() expects a SAFEARRAY of VARIANTs containing BSTRs.
+	SAFEARRAY* sa = SafeArrayCreateVector(VT_VARIANT, 0, 1);
+	VARIANT* pv;
+	SafeArrayAccessData(sa, (void**)&pv);
+	pv->vt = VT_BSTR;
+	pv->bstrVal = SysAllocString(html);
+	SafeArrayUnaccessData(sa);
+	d->write(sa);
+	d->close(); // Finalize the document - like closing a file after writing
+	SafeArrayDestroy(sa);
 	d->Release();
 	b->Release();
 }
 
-inline void ExecScript(hTrident h, const wchar_t* js) {
+// GetDocument - fetches the current DOM document as IHTMLDocument2.
+//
+// This gives callers direct access to the Trident DOM API for advanced operations
+// like createElement(), get_body(), querying additional interfaces (IHTMLDocument3,
+// IHTMLDOMNode, etc.), and custom DOM traversal/manipulation.
+//
+// Ownership: the returned interface has an outstanding COM reference from QueryInterface,
+// so the caller must release it with doc->Release().
+inline hDocument GetDocument(hTrident h) {
 	IWebBrowser2* b = GetTridentBrowser(h);
-	if (!b) return;
+	if (!b) return NULL;
+	IDispatch* p = NULL;
+	if (FAILED(b->get_Document(&p))) return NULL;
+	IHTMLDocument2* d = NULL;
+	if (FAILED(p->QueryInterface(IID_IHTMLDocument2, (void**)&d))) { p->Release(); return NULL; }
+	p->Release();
+	return d;
+}
 
-	IDispatch* d = NULL;
-	b->get_Document(&d);
-	if (!d) return;
+inline hDocument2 GetDocument2(hDocument d) {
+	IHTMLDocument3* d2 = NULL;
+	if (FAILED(d->QueryInterface(IID_IHTMLDocument3, (void**)&d2))) return NULL;
+	return d2;
+}
 
-	IHTMLDocument2* doc = NULL;
-	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument2, (void**)&doc))) {
-		IHTMLWindow2* w = NULL;
-		if (SUCCEEDED(doc->get_parentWindow(&w))) {
-			VARIANT r;
-			VariantInit(&r);
-			BSTR code = SysAllocString(js);
-			BSTR lang = SysAllocString(L"JavaScript");
-			w->execScript(code, lang, &r);
-			SysFreeString(code);
-			SysFreeString(lang);
-			VariantClear(&r);
-			w->Release();
-		}
-		doc->Release();
+// Call JavaScript functions
+// 
+// Method 1: Use CallJS()
+//  	If the function you want to call is a global function and you want the return value, use this.
+//  	Always remember to fill the parameters in REVERSE order!
+//  	Cannot call functions inside a namespace.
+// 
+// Method 2: Use EvalJS()
+//  	This has the exact same effect as running eval() in Java Script, so functions inside namespaces are accessible and a return value can be obtained normally.
+//  	Since your function call is wrapped inside eval(), this might be slightly slower than CallJS, so use CallJS instead whenever possible.
+// 
+// Methos 3: Use RunJS()
+//  	If you do NOT need the return value, use this method.
+//  	It's the simplest out of all three.
+
+inline VARIANT CallJS(hTrident h, const wchar_t* jsfunc, VARIANT* args, int argc) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!jsfunc) return result;
+	hDocument doc = GetDocument(h);
+	if (!doc) return result;
+	IDispatch* scriptDisp = NULL;
+	doc->get_Script(&scriptDisp);
+	doc->Release();
+	if (!scriptDisp) return result;
+	DISPID funcid;
+	LPOLESTR funcname = SysAllocString(jsfunc);
+	if (SUCCEEDED(scriptDisp->GetIDsOfNames(IID_NULL, &funcname, 1, LOCALE_USER_DEFAULT, &funcid))) {
+		DISPPARAMS dp = { args, NULL, argc, 0 };
+		scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL);
 	}
+	SysFreeString(funcname);
+	scriptDisp->Release();
+	return result;
+}
+
+inline VARIANT EvalJS(hTrident h, const wchar_t* js) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!js) return result;
+	hDocument doc = GetDocument(h);
+	if (!doc) return result;
+	IDispatch* scriptDisp = NULL;
+	doc->get_Script(&scriptDisp);
+	doc->Release();
+	if (!scriptDisp) return result;
+	DISPID evalId;
+	LPOLESTR evalName = SysAllocString(L"eval");
+	HRESULT hr = scriptDisp->GetIDsOfNames(IID_NULL, &evalName, 1, LOCALE_USER_DEFAULT, &evalId);
+	if (SUCCEEDED(hr)) {
+		VARIANT arg;
+		arg.vt = VT_BSTR;
+		arg.bstrVal = SysAllocString(js);
+		DISPPARAMS dp = { &arg, NULL, 1, 0 };
+		hr = scriptDisp->Invoke(evalId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL);
+		SysFreeString(arg.bstrVal);
+	}
+	SysFreeString(evalName);
+	scriptDisp->Release();
+	return result;
+}
+
+inline void RunJS(hTrident h, const wchar_t* js) {
+	if (!js) return;
+	hDocument d = GetDocument(h);
+	if (!d) return;
+	IHTMLWindow2* w = NULL;
+	HRESULT hr = d->get_parentWindow(&w);
+	if (FAILED(hr)) {d->Release();return;}
+	BSTR code = SysAllocString(js);
+	BSTR lang = SysAllocString(L"JavaScript");
+	hr = w->execScript(code, lang, nullptr);
+	SysFreeString(code);
+	SysFreeString(lang);
+	w->Release();
 	d->Release();
 }
 
 inline hElement GetElement(hTrident h, const wchar_t* id) {
-	IWebBrowser2* b = GetTridentBrowser(h);
-	if (!b) return NULL;
-
-	IDispatch* d = NULL;
-	b->get_Document(&d);
+	hDocument d = GetDocument(h);
 	if (!d) return NULL;
-
-	IHTMLElement* elem = NULL;
-	IHTMLDocument3* doc3 = NULL;
-	if (SUCCEEDED(d->QueryInterface(IID_IHTMLDocument3, (void**)&doc3))) {
-		BSTR bstrId = SysAllocString(id);
-		doc3->getElementById(bstrId, &elem);
-		SysFreeString(bstrId);
-		doc3->Release();
-	}
+	hDocument2 d2 = GetDocument2(d);
+	if (!d2) { d->Release(); return NULL; }
+	BSTR bstrId = SysAllocString(id);
+	IHTMLElement* e = NULL;
+	d2->getElementById(bstrId, &e);
+	SysFreeString(bstrId);
+	d2->Release();
 	d->Release();
-	return elem;
-}
-
-inline void ReleaseElement(hElement e) {
-	if (e) e->Release();
+	return e;
 }
 
 inline void SetHTML(hElement e, const wchar_t* html) {
@@ -1155,27 +1222,71 @@ inline std::wstring GetAttr(hElement e, const wchar_t* name) {
 inline void SetElementHTML(hTrident h, const wchar_t* id, const wchar_t* html) {
 	hElement e = GetElement(h, id);
 	SetHTML(e, html);
-	ReleaseElement(e);
+	e->Release();
 }
 
 inline std::wstring GetElementHTML(hTrident h, const wchar_t* id) {
 	hElement e = GetElement(h, id);
 	std::wstring result = GetHTML(e);
-	ReleaseElement(e);
+	e->Release();
 	return result;
 }
 
 inline void SetElementText(hTrident h, const wchar_t* id, const wchar_t* text) {
 	hElement e = GetElement(h, id);
 	SetText(e, text);
-	ReleaseElement(e);
+	e->Release();
 }
 
 inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 	hElement e = GetElement(h, id);
 	std::wstring result = GetText(e);
-	ReleaseElement(e);
+	e->Release();
 	return result;
+}
+
+// InsertHTML - insert HTML content relative to the <body> element.
+// 'where' uses IE's insertAdjacentHTML positions:
+//  	"afterbegin"	- first child of <body>
+//  	"beforeend"		- last child of <body> (most common - appends to page)
+//  	"beforebegin"	- before <body> (rarely useful)
+//  	"afterend"		- after <body> (rarely useful)
+inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, const wchar_t* html) {
+	hElement e = GetElement(h, id);
+	if (!e) return;
+	static const wchar_t* positions[] = {L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd"};
+	BSTR bstrWhere = SysAllocString(positions[where]);
+	BSTR bstrHTML = SysAllocString(html);
+	e->insertAdjacentHTML(bstrWhere, bstrHTML);
+	SysFreeString(bstrWhere);
+	SysFreeString(bstrHTML);
+	e->Release();
+}
+
+inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html) {
+	hDocument doc = GetDocument(h);
+	if (!doc) return;
+	IHTMLElement* body = NULL;
+	doc->get_body(&body);
+	doc->Release();
+	if (!body) return;
+	static const wchar_t* positions[] = {L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd"};
+	BSTR bstrWhere = SysAllocString(positions[where]);
+	BSTR bstrHTML = SysAllocString(html);
+	body->insertAdjacentHTML(bstrWhere, bstrHTML);
+	SysFreeString(bstrWhere);
+	SysFreeString(bstrHTML);
+	body->Release();
+}
+
+// RemoveElement - remove an element from the DOM by its ID.
+inline void RemoveElement(hTrident h, const wchar_t* id) {
+	hElement e = GetElement(h, id);
+	if (!e) return;
+	BSTR empty = SysAllocString(L"");
+	e->put_outerHTML(empty);
+	SysFreeString(empty);
+	e->Release();
 }
 
 // ============================================================================
