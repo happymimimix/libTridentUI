@@ -79,7 +79,7 @@
 - [x] Call JS functions from C++ (ExecScript)
 - [x] Pass arguments: int, double, string, bool
 - [x] Return values from C++ to JS
-- [ ] Return values from JS to C++ (Work in progress)
+- [x] Return values from JS to C++
 - [x] Async callbacks from C++ to JS
 
 ### DOM manipulation from C++
@@ -91,7 +91,7 @@
 - [x] Set CSS class
 - [x] Set inline style
 - [x] Convenience functions (SetElementHTML, SetElementText by ID)
-- [ ] Create/remove elements from C++ (Work in progress)
+- [x] Create/remove elements from C++
 - [ ] Query elements by class/tag/CSS selector
 - [ ] Event listener management from C++
 
