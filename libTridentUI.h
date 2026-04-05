@@ -116,18 +116,19 @@ typedef ControlReg_* hControlClass;
 using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
 using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
 
-typedef LRESULT (*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* handled);
+typedef LRESULT (*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 typedef LRESULT (*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 typedef HRESULT (*PropertyGetter)(hControl c, VARIANT* result);
 typedef HRESULT (*PropertySetter)(hControl c, VARIANT value);
 typedef HRESULT (*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 typedef HRESULT (*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef void (*DropLeaveCallback)(hControl c);
+typedef HRESULT (*DropLeaveCallback)(hControl c);
 typedef HRESULT (*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 
 inline void TridentInit();
 inline void TridentShutdown();
-inline void RunMessageLoop();
+inline void TridentRunMessageLoop();
+inline bool TridentProcessMessage(MSG& msg);
 
 inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW);
 inline void CloseTridentWindow(hTrident h);
@@ -181,9 +182,10 @@ inline void* GetControlUserData(hControl c);
 inline void SetControlUserData(hControl c, void* data);
 inline void InvalidateControl(hControl c);
 inline hControlClass GetControlClass(hControl c);
+inline hTrident FindHostFromControl(hControl c);
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
 inline void DisableDragDrop(hControl c);
-inline IDataObject* CreateTextDataObject(const wchar_t* text);
+inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects = DROPEFFECT_COPY, DWORD* outEffect = NULL);
 
 // COM implementations
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
@@ -743,9 +745,7 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     
     if (h) {
         if (h->userProc) {
-            bool handled = false;
-            LRESULT r = h->userProc(h, hwnd, msg, wp, lp, &handled);
-            if (handled) return r;
+            LRESULT r = h->userProc(h, hwnd, msg, wp, lp);
         }
         if (msg == WM_SIZE && h->site) {
             h->site->Resize(LOWORD(lp), HIWORD(lp));
@@ -790,41 +790,45 @@ inline void TridentShutdown() {
     OleUninitialize();
 }
 
-// RunMessageLoop - standard Win32 message loop with IE keyboard handling.
+// TridentRunMessageLoop - standard Win32 message loop with IE keyboard handling.
 // IE needs to process Tab, Enter, Ctrl+C, etc. through its own TranslateAccelerator.
 // Without this, keyboard input in the browser would be broken (you couldn't tab
 // between form fields, copy text, etc.). We check IsChild to make sure we only
 // send keystrokes to the window that actually owns the focused control - otherwise
 // a background window could steal keys from the foreground window.
-inline void RunMessageLoop() {
+inline void TridentRunMessageLoop() {
     MSG msg;
-    BOOL bRet;
-    while ((bRet = GetMessage(&msg, NULL, 0, 0)) != 0) {
-        if (bRet == -1) break; // GetMessage error - bail out
-        bool ate = false;
-        for (TridentWindowData_* p = g_trident_head; p; ) {
-            TridentWindowData_* next = p->next;
-            if (p->alive && p->site && p->hwnd &&
-                (msg.hwnd == p->hwnd || IsChild(p->hwnd, msg.hwnd))) {
-                IWebBrowser2* b = p->site->GetBrowser();
-                if (b) {
-                    b->AddRef();
-                    IOleInPlaceActiveObject* ao = NULL;
-                    if (SUCCEEDED(b->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ao))) {
-                        ate = (ao->TranslateAccelerator(&msg) == S_OK);
-                        ao->Release();
-                    }
-                    b->Release();
-                }
-            }
-            if (ate) break;
-            p = next;
-        }
-        if (!ate) {
+    while (GetMessage(&msg, NULL, 0, 0) > 0) {
+        if (!TridentProcessMessage(msg)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        if (!g_trident_head) {
+            PostQuitMessage(0);
+        }
     }
+}
+
+inline bool TridentProcessMessage(MSG& msg) {
+    for (TridentWindowData_* CurrentPtr = g_trident_head; CurrentPtr;) {
+        TridentWindowData_* NextPtr = CurrentPtr->next;
+        if (CurrentPtr->alive && CurrentPtr->site && CurrentPtr->hwnd &&
+            (msg.hwnd == CurrentPtr->hwnd || IsChild(CurrentPtr->hwnd, msg.hwnd))) {
+            IWebBrowser2* BrowserPtr = CurrentPtr->site->GetBrowser();
+            if (BrowserPtr) {
+                BrowserPtr->AddRef();
+                IOleInPlaceActiveObject* ObjectPtr = NULL;
+                if (SUCCEEDED(BrowserPtr->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ObjectPtr))) {
+                    bool Handled = (ObjectPtr->TranslateAccelerator(&msg) == S_OK);
+                    ObjectPtr->Release();
+                    if (Handled) return true;
+                }
+                BrowserPtr->Release();
+            }
+        }
+        CurrentPtr = NextPtr;
+    }
+    return false;
 }
 
 inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner, DWORD style) {
@@ -1856,7 +1860,6 @@ public:
     STDMETHODIMP DragEnter(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
         if (!eff) return E_POINTER;
         if (m_inst->onDragEnter) return m_inst->onDragEnter(m_inst, pObj, keys, pt, eff);
-        if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
     STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* eff) override {
@@ -1864,8 +1867,8 @@ public:
         if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
         *eff = DROPEFFECT_NONE; return S_OK;
     }
-    STDMETHODIMP DragLeave() override {
-        if (m_inst->onDragLeave) m_inst->onDragLeave(m_inst);
+    STDMETHODIMP DragLeave(void) override {
+        if (m_inst->onDragLeave) return m_inst->onDragLeave(m_inst);
         return S_OK;
     }
     STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
@@ -2207,6 +2210,12 @@ inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args) {
     FireEvent(c, id, args);
 }
 
+inline hTrident FindHostFromControl(hControl c) {
+    HWND hHost = GetAncestor(GetControlHWND(c), GA_ROOT);
+    hTrident h = (hTrident)GetWindowLongPtr(hHost, GWLP_USERDATA);
+    return h;
+}
+
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter, DropOverCallback onDragOver, DropLeaveCallback onDragLeave) {
     if (!c || !c->hwnd) return;
     c->onDrop = onDrop; c->onDragEnter = onDragEnter; c->onDragOver = onDragOver; c->onDragLeave = onDragLeave;
@@ -2230,4 +2239,10 @@ inline void DisableDragDrop(hControl c) {
     c->onDragLeave = NULL;
 }
 
-inline IDataObject* CreateTextDataObject(const wchar_t* text) { return new SimpleDataObject(text ? text : L""); }
+inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects, DWORD* outEffect) {
+    if (!c || !c->hwnd || !data) return E_INVALIDARG;
+    ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
+    if (!ctrl) return E_FAIL;
+    HRESULT hr = DoDragDrop(data, static_cast<IDropSource*>(ctrl), allowedEffects, outEffect);
+    return hr;
+}
