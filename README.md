@@ -28,7 +28,7 @@
    
    libTridentUI is built on Microsoft Internet Explorer’s Trident engine, offering absolute top-tier compatibility!!!
    
-   * [x] Windows 2000 SP4
+   * [x] Windows 2000 SP4 (⚠ Untested but expected to work)
    * [x] Windows XP SP3
    * [x] Windows Vista SP1
    * [x] Windows 7 SP1
