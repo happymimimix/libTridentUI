@@ -128,7 +128,7 @@ typedef HRESULT (*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyS
 inline void TridentInit();
 inline void TridentShutdown();
 inline void TridentRunMessageLoop();
-inline bool TridentProcessMessage(MSG& msg);
+inline void TridentProcessMessage(MSG& msg, bool* is_eaten);
 
 inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW);
 inline void CloseTridentWindow(hTrident h);
@@ -744,12 +744,11 @@ inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARA
     }
     
     if (h) {
-        if (h->userProc) {
-            LRESULT r = h->userProc(h, hwnd, msg, wp, lp);
-        }
         if (msg == WM_SIZE && h->site) {
             h->site->Resize(LOWORD(lp), HIWORD(lp));
-            return 0;
+        }
+        if (h->userProc) {
+            LRESULT r = h->userProc(h, hwnd, msg, wp, lp);
         }
         if (msg == WM_CLOSE) {
             DestroyWindow(hwnd);
@@ -799,17 +798,44 @@ inline void TridentShutdown() {
 inline void TridentRunMessageLoop() {
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0) > 0) {
-        if (!TridentProcessMessage(msg)) {
+        bool MessageEaten = false;
+        TridentProcessMessage(msg, &MessageEaten);
+        if (!MessageEaten) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
-        if (!g_trident_head) {
-            PostQuitMessage(0);
-        }
+        // Quit the program if there are no more Trident windows!
+        if (!g_trident_head) break;
     }
+    PostQuitMessage(0);
 }
 
-inline bool TridentProcessMessage(MSG& msg) {
+// TridentProcessMessage - processes a single message for libTridentUI windows.
+//
+// Call this from YOUR OWN message loop when your application has a mix of
+// libTridentUI windows and other windows.
+//
+// Usage:
+//   MSG msg;
+//   while (GetMessage(&msg, NULL, 0, 0) > 0) {
+//       bool eaten = false;
+//       TridentProcessMessage(msg, &eaten);
+//       if (!eaten) {
+//           TranslateMessage(&msg);
+//           DispatchMessage(&msg);
+//       }
+//   }
+//
+// If the message belongs to an IE control inside one of our windows (Tab key,
+// Ctrl+C, Enter, etc.), it gets handled internally and *is_eaten is set to true.
+// In that case, do NOT call TranslateMessage/DispatchMessage -- IE already ate it.
+// If *is_eaten is false, the message is not ours -- pass it along as normal.
+//
+// If you don't have your own message loop and all your windows are libTridentUI,
+// just call TridentRunMessageLoop() instead -- it calls this function internally.
+inline void TridentProcessMessage(MSG& msg, bool* is_eaten) {
+    if (!is_eaten) return;
+    *is_eaten = false; // Initialize *eaten to always be false at the beginning.
     for (TridentWindowData_* CurrentPtr = g_trident_head; CurrentPtr;) {
         TridentWindowData_* NextPtr = CurrentPtr->next;
         if (CurrentPtr->alive && CurrentPtr->site && CurrentPtr->hwnd &&
@@ -819,16 +845,15 @@ inline bool TridentProcessMessage(MSG& msg) {
                 BrowserPtr->AddRef();
                 IOleInPlaceActiveObject* ObjectPtr = NULL;
                 if (SUCCEEDED(BrowserPtr->QueryInterface(IID_IOleInPlaceActiveObject, (void**)&ObjectPtr))) {
-                    bool Handled = (ObjectPtr->TranslateAccelerator(&msg) == S_OK);
+                    *is_eaten = (ObjectPtr->TranslateAccelerator(&msg) == S_OK);
                     ObjectPtr->Release();
-                    if (Handled) return true;
                 }
                 BrowserPtr->Release();
             }
         }
+        if (*is_eaten) return;
         CurrentPtr = NextPtr;
     }
-    return false;
 }
 
 inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner, DWORD style) {
