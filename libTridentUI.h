@@ -28,7 +28,7 @@ frame for my toolbar" and we give it a dummy one. And so on, for about 20 differ
 
 The key interfaces WE implement (as the "container" / "host"):
   IOleClientSite              - "I'm the app hosting you, here's how to talk to me"
-  IOleInPlaceSiteWindowless   - "Here's the window you can draw in"
+  IOleInPlaceSiteEx           - "Here's the window you can draw in"
   IOleControlSite             - "I can handle your keyboard accelerators"
   IDocHostUIHandler           - "I control the right-click menu, scrollbars, etc."
   IDispatch                   - "I handle navigation events (like page load complete)"
@@ -99,7 +99,9 @@ typedef IHTMLElement* hElement;
 //   dp->rgvarg[1].lVal = 10  (first arg)
 //
 // Example - C++ fires event with args (42, "hello"):
-//   VARIANT args[2] = { VarBstr(L"hello"), VarInt(42) };  // reverse order!
+//   VARIANT args[2];
+//   args[0].vt = VT_BSTR; args[0].bstrVal = SysAllocString(L"hello");  // last arg first
+//   args[1].vt = VT_I4;   args[1].lVal = 42;                           // first arg last
 //   FireEvent(c, evtId, args, 2);
 
 
@@ -289,10 +291,8 @@ public:
 //                               "who's hosting me?" and "where should I save my data?"
 //                               We mostly return E_NOTIMPL because we don't save anything.
 //
-//   IOleInPlaceSiteWindowless   Handles the visual embedding. IE asks for the HWND to draw
-//                               in, reports activation/deactivation, and does mouse capture.
-//                               The "Windowless" part means IE *can* draw without its own
-//                               HWND (directly onto ours). We support both modes.
+//   IOleInPlaceSiteEx           Handles the visual embedding. IE asks for the HWND to draw
+//                               in, and reports activation/deactivation state changes.
 //
 //   IOleControlSite             Keyboard and focus management. IE asks us to translate
 //                               accelerator keys and track focus changes.
@@ -314,7 +314,7 @@ public:
 //
 class OleSite :
     public IOleClientSite,
-    public IOleInPlaceSiteWindowless,
+    public IOleInPlaceSiteEx,
     public IOleControlSite,
     public IObjectWithSite,
     public IOleContainer,
@@ -326,8 +326,7 @@ public:
     
     OleSite() : m_ref(1), m_hwnd(NULL), m_pUnkSite(NULL),
         m_pView(NULL), m_pInPlace(NULL), m_pOle(NULL), m_pBrowser(NULL),
-        m_cookie(0), m_bWindowless(true), m_bFocused(false), m_bCaptured(false),
-        m_bUIActivated(false), m_bInPlaceActive(false), m_bLocked(false) {}
+        m_cookie(0) {}
     
     ~OleSite() {
         Destroy();
@@ -379,12 +378,8 @@ public:
             psi->Release();
         }
 
-        // Step 4: Get IE's drawing interface. We try the most capable version first
-        // (IViewObjectEx) and fall back to simpler ones. This is needed for ShowObject()
-        // to request a redraw of the browser area.
-        hr = m_pOle->QueryInterface(IID_IViewObjectEx, (void**)&m_pView);
-        if (FAILED(hr)) hr = m_pOle->QueryInterface(IID_IViewObject2, (void**)&m_pView);
-        if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
+        // Step 4: Get IE's drawing interface for ShowObject() redraws.
+        m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
         m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
         // Step 5: Activate IE "in place" - this makes it create its child windows inside
@@ -448,7 +443,6 @@ public:
         *ppv = NULL;
         if (riid == IID_IUnknown) *ppv = static_cast<IOleWindow*>(this);
         else if (riid == IID_IOleClientSite) *ppv = static_cast<IOleClientSite*>(this);
-        else if (riid == IID_IOleInPlaceSiteWindowless) *ppv = static_cast<IOleInPlaceSiteWindowless*>(this);
         else if (riid == IID_IOleInPlaceSiteEx) *ppv = static_cast<IOleInPlaceSiteEx*>(this);
         else if (riid == IID_IOleInPlaceSite) *ppv = static_cast<IOleInPlaceSite*>(this);
         else if (riid == IID_IOleWindow) *ppv = static_cast<IOleWindow*>(this);
@@ -497,7 +491,7 @@ public:
         return m_pUnkSite->QueryInterface(riid, pp);
     }
 
-    // ---- IOleInPlaceSite / IOleInPlaceSiteWindowless ----
+    // ---- IOleInPlaceSite ----
     // This is where the magic happens: IE asks "can I activate inside your window?"
     // and we say yes, give it our HWND, and tell it how big the available area is.
     STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_hwnd; return S_OK; }
@@ -507,7 +501,7 @@ public:
         BOOL dummy = FALSE;
         return OnInPlaceActivateEx(&dummy, 0);
     }
-    STDMETHODIMP OnUIActivate() override { m_bUIActivated = true; return S_OK; }
+    STDMETHODIMP OnUIActivate() override { return S_OK; }
     // GetWindowContext - IE asks "give me a frame, a UI window, and the rectangles
     // I can draw in". We provide a dummy InlineFrame (which is basically a no-op
     // implementation of IOleInPlaceFrame), and tell IE it can use our entire client area.
@@ -525,7 +519,7 @@ public:
         return S_OK;
     }
     STDMETHODIMP Scroll(SIZE) override { return E_NOTIMPL; }
-    STDMETHODIMP OnUIDeactivate(BOOL) override { m_bUIActivated = false; return S_OK; }
+    STDMETHODIMP OnUIDeactivate(BOOL) override { return S_OK; }
     STDMETHODIMP OnInPlaceDeactivate() override { return OnInPlaceDeactivateEx(TRUE); }
     STDMETHODIMP DiscardUndoState() override { return E_NOTIMPL; }
     STDMETHODIMP DeactivateAndUndo() override { return E_NOTIMPL; }
@@ -533,29 +527,16 @@ public:
 
     // OnInPlaceActivateEx - IE is going live inside our window.
     // OleLockRunning prevents the OLE object from being garbage-collected while active.
-    // We try windowless mode first (IE draws directly on our HDC) - if that fails,
-    // we fall back to windowed mode (IE creates its own child HWND).
-    STDMETHODIMP OnInPlaceActivateEx(BOOL*, DWORD dwFlags) override {
+    STDMETHODIMP OnInPlaceActivateEx(BOOL*, DWORD) override {
         if (!m_hwnd || !m_pOle) return E_UNEXPECTED;
+        HRESULT hr = m_pOle->QueryInterface(IID_IOleInPlaceObject, (void**)&m_pInPlace);
+        if (FAILED(hr)) return hr;
         OleLockRunning(m_pOle, TRUE, FALSE);
-        HRESULT hr = E_FAIL;
-        if (dwFlags & ACTIVATE_WINDOWLESS) {
-            m_bWindowless = true;
-            hr = m_pOle->QueryInterface(IID_IOleInPlaceObjectWindowless, (void**)&m_pInPlace);
-        }
-        if (FAILED(hr)) {
-            m_bWindowless = false;
-            hr = m_pOle->QueryInterface(IID_IOleInPlaceObject, (void**)&m_pInPlace);
-        }
-        if (m_pInPlace) {
-            RECT rc; GetClientRect(m_hwnd, &rc);
-            m_pInPlace->SetObjectRects(&rc, &rc);
-        }
-        m_bInPlaceActive = SUCCEEDED(hr);
-        return hr;
+        RECT rc; GetClientRect(m_hwnd, &rc);
+        m_pInPlace->SetObjectRects(&rc, &rc);
+        return S_OK;
     }
     STDMETHODIMP OnInPlaceDeactivateEx(BOOL) override {
-        m_bInPlaceActive = false;
         if (m_pOle) OleLockRunning(m_pOle, FALSE, FALSE);
         if (m_pInPlace) {
             m_pInPlace->Release();
@@ -564,42 +545,6 @@ public:
         return S_OK;
     }
     STDMETHODIMP RequestUIActivate() override { return S_OK; }
-    STDMETHODIMP CanWindowlessActivate() override { return S_OK; }
-    STDMETHODIMP GetCapture() override { return m_bCaptured ? S_OK : S_FALSE; }
-    STDMETHODIMP SetCapture(BOOL f) override {
-        m_bCaptured = (f == TRUE);
-        if (f) ::SetCapture(m_hwnd); else ::ReleaseCapture();
-        return S_OK;
-    }
-    STDMETHODIMP GetFocus() override { return m_bFocused ? S_OK : S_FALSE; }
-    STDMETHODIMP SetFocus(BOOL f) override {
-        if (f) ::SetFocus(m_hwnd);
-        m_bFocused = (f == TRUE);
-        return S_OK;
-    }
-    STDMETHODIMP GetDC(LPCRECT, DWORD grfFlags, HDC* phDC) override {
-        if (!phDC) return E_POINTER;
-        *phDC = ::GetDC(m_hwnd);
-        return S_OK;
-    }
-    STDMETHODIMP ReleaseDC(HDC h) override {
-        ::ReleaseDC(m_hwnd, h);
-        return S_OK;
-    }
-    STDMETHODIMP InvalidateRect(LPCRECT p, BOOL e) override {
-        ::InvalidateRect(m_hwnd, p, e);
-        return S_OK;
-    }
-    STDMETHODIMP InvalidateRgn(HRGN h, BOOL e) override {
-        ::InvalidateRgn(m_hwnd, h, e);
-        return S_OK;
-    }
-    STDMETHODIMP ScrollRect(INT, INT, LPCRECT, LPCRECT) override { return S_OK; }
-    STDMETHODIMP AdjustRect(LPRECT) override { return S_OK; }
-    STDMETHODIMP OnDefWindowMessage(UINT msg, WPARAM wp, LPARAM lp, LRESULT* pr) override {
-        *pr = DefWindowProc(m_hwnd, msg, wp, lp);
-        return S_OK;
-    }
     STDMETHODIMP OnControlInfoChanged() override { return S_OK; }
     STDMETHODIMP LockInPlaceActive(BOOL) override { return S_OK; }
     STDMETHODIMP GetExtendedControl(IDispatch** p) override {
@@ -608,14 +553,14 @@ public:
     }
     STDMETHODIMP TransformCoords(POINTL*, POINTF*, DWORD) override { return S_OK; }
     STDMETHODIMP TranslateAccelerator(MSG*, DWORD) override { return S_FALSE; }
-    STDMETHODIMP OnFocus(BOOL f) override { m_bFocused = (f == TRUE); return S_OK; }
+    STDMETHODIMP OnFocus(BOOL) override { return S_OK; }
     STDMETHODIMP ShowPropertyFrame() override { return E_NOTIMPL; }
     STDMETHODIMP EnumObjects(DWORD, IEnumUnknown** pp) override {
         if (!pp || !m_pOle) return E_POINTER;
         *pp = new InlineEnum(m_pOle);
         return S_OK;
     }
-    STDMETHODIMP LockContainer(BOOL f) override { m_bLocked = (f != FALSE); return S_OK; }
+    STDMETHODIMP LockContainer(BOOL) override { return S_OK; }
     STDMETHODIMP ParseDisplayName(IBindCtx*, LPOLESTR, ULONG*, IMoniker**) override { return E_NOTIMPL; }
 
     // ---- IDocHostUIHandler ----
@@ -756,16 +701,10 @@ private:
     HWND m_hwnd; // The host window we draw into
     IUnknown* m_pUnkSite; // IObjectWithSite back-pointer
     IViewObject* m_pView; // IE's drawing interface
-    IOleInPlaceObjectWindowless* m_pInPlace; // IE's in-place positioning interface
+    IOleInPlaceObject* m_pInPlace; // IE's in-place positioning interface
     IOleObject* m_pOle; // THE main IE COM object
     IWebBrowser2* m_pBrowser; // Our handle to the browser (Navigate, get_Document, etc.)
     DWORD m_cookie; // Connection point cookie (for unsubscribing events)
-    bool m_bWindowless; // True if IE is drawing without its own HWND
-    bool m_bFocused;
-    bool m_bCaptured;
-    bool m_bUIActivated;
-    bool m_bInPlaceActive;
-    bool m_bLocked;
 };
 
 // TridentWindowData_ - the internal data behind an hTrident handle.
@@ -1249,66 +1188,6 @@ struct DispEntry {
     PropertySetter setter;
 };
 
-// ControlReg_ - stores everything about a registered control CLASS (shared by all instances).
-// Think of it like a "template": the WndProc, the CLSID, the bound methods/properties.
-// Reference-counted because both the registry and active instances hold pointers to it.
-// UnregisterControl releases the registry's ref; instances release theirs in ~ActiveXControl.
-struct ControlReg_ {
-    LONG refCount = 1; // Registry holds 1, each ActiveXControl instance adds 1
-    std::wstring name;
-    ControlWndProc wndProc;
-    void* defaultUserData;
-    CLSID clsid;
-    DWORD comCookie; // CoRegisterClassObject cookie - needed to unregister
-    std::wstring wndClassName; // "TridentControl_" + name
-    ATOM wndAtom = 0; // RegisterClassEx return value
-    DWORD extraStyle; // Extra WS_ flags for CreateWindowEx
-    CRITICAL_SECTION cs; // Protects the maps below
-    DISPID nextDispId = INT32_MAX; // Method/property IDs count down from here
-    std::map<std::wstring, DISPID> name2id;
-    std::map<DISPID, DispEntry> entries;
-    EventTypeInfo* eventInfo = NULL;     // Owns event name->DISPID registry + dispatch ITypeInfo
-    CoclassTypeInfo* coclassInfo = NULL; // Coclass-level ITypeInfo for GetClassInfo()
-    ControlReg_() { InitializeCriticalSection(&cs); }
-    ~ControlReg_() {
-        if (coclassInfo) coclassInfo->Release();  // Release dependent first
-        if (eventInfo) eventInfo->Release();
-        if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(NULL));
-        DeleteCriticalSection(&cs);
-    }
-    void AddRef()  { InterlockedIncrement(&refCount); }
-    void Release() { if (InterlockedDecrement(&refCount) == 0) delete this; }
-};
-
-// Global registry: CLSID -> ControlReg_*. This is how CoCreateInstance finds our factory.
-inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
-    static std::map<CLSID, ControlReg_*, CLSIDCompare> s;
-    return s;
-}
-
-// ControlInstance_ - per-instance data for each <object> tag on a page.
-// If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
-// but they all share the same ControlReg_ (same WndProc, same methods).
-struct ControlInstance_ {
-    ControlReg_* reg = NULL; // Back-pointer to the class registration
-    HWND hwnd = NULL; // The child window we create inside IE
-    void* userData = NULL; // Per-instance user data
-    IOleClientSite* clientSite = NULL; // IE's hosting site for this control
-    IOleAdviseHolder* adviseHolder = NULL;
-    IOleInPlaceSite* inPlaceSite = NULL;
-    bool active = false; // True after DoVerb(INPLACEACTIVATE)
-    bool uiActive = false; // True after DoVerb(UIACTIVATE)
-    RECT rcPos; // Our position inside IE's document
-    SIZEL extent = { 0, 0 }; // Size in HIMETRIC units (IE sends this via SetExtent)
-    std::map<DWORD, IDispatch*> sinks; // Event subscribers (from IConnectionPoint::Advise)
-    DWORD nextCookie = 1; // Cookie counter for Advise/Unadvise
-    DropCallback onDrop = NULL; // Drag-drop callbacks
-    DropEnterCallback onDragEnter = NULL;
-    DropOverCallback onDragOver = NULL;
-    DropLeaveCallback onDragLeave = NULL;
-    bool dropRegistered = false;
-};
-
 // EventTypeInfo - ITypeInfo for the outgoing event dispatch interface.
 //
 // This is half of the type info system that makes IE's native attachEvent() work.
@@ -1382,7 +1261,7 @@ public:
         memset(ta, 0, sizeof(TYPEATTR));
         ta->guid = IID_IDispatch;
         ta->typekind = TKIND_DISPATCH;
-        ta->cbSizeVft = sizeof(IDispatchVtbl);
+        ta->cbSizeVft = 7 * sizeof(void*);
         ta->wTypeFlags = TYPEFLAG_FDISPATCHABLE;
         EnterCriticalSection(&m_cs);
         ta->cFuncs = (WORD)m_name2id.size();
@@ -1390,7 +1269,7 @@ public:
         *pp = ta;
         return S_OK;
     }
-    STDMETHODIMP ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+    STDMETHODIMP_(void) ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); }
 
     // GetFuncDesc - describe event N as a dispinterface method.
     // IE might call this to enumerate all events on the source interface.
@@ -1413,7 +1292,7 @@ public:
         *ppDesc = fd;
         return S_OK;
     }
-    STDMETHODIMP ReleaseFuncDesc(FUNCDESC* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+    STDMETHODIMP_(void) ReleaseFuncDesc(FUNCDESC* p) override { if (p) CoTaskMemFree(p); }
 
     // GetNames - reverse-lookup DISPID -> event name.
     STDMETHODIMP GetNames(MEMBERID id, BSTR* names, UINT maxNames, UINT* pcNames) override {
@@ -1459,7 +1338,7 @@ public:
     STDMETHODIMP CreateInstance(IUnknown*, REFIID, void**) override { return E_NOTIMPL; }
     STDMETHODIMP GetMops(MEMBERID, BSTR*) override { return E_NOTIMPL; }
     STDMETHODIMP GetContainingTypeLib(ITypeLib**, UINT*) override { return E_NOTIMPL; }
-    STDMETHODIMP ReleaseVarDesc(VARDESC*) override { return S_OK; }
+    STDMETHODIMP_(void) ReleaseVarDesc(VARDESC*) override {}
 };
 
 // CoclassTypeInfo - coclass-level ITypeInfo that navigates IE to EventTypeInfo.
@@ -1496,7 +1375,7 @@ public:
         *pp = ta;
         return S_OK;
     }
-    STDMETHODIMP ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+    STDMETHODIMP_(void) ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); }
 
     // GetImplTypeFlags - our one impl type is [source, default]
     STDMETHODIMP GetImplTypeFlags(UINT index, INT* flags) override {
@@ -1534,8 +1413,68 @@ public:
     STDMETHODIMP CreateInstance(IUnknown*, REFIID, void**) override { return E_NOTIMPL; }
     STDMETHODIMP GetMops(MEMBERID, BSTR*) override { return E_NOTIMPL; }
     STDMETHODIMP GetContainingTypeLib(ITypeLib**, UINT*) override { return E_NOTIMPL; }
-    STDMETHODIMP ReleaseFuncDesc(FUNCDESC*) override { return S_OK; }
-    STDMETHODIMP ReleaseVarDesc(VARDESC*) override { return S_OK; }
+    STDMETHODIMP_(void) ReleaseFuncDesc(FUNCDESC*) override {}
+    STDMETHODIMP_(void) ReleaseVarDesc(VARDESC*) override {}
+};
+
+// ControlReg_ - stores everything about a registered control CLASS (shared by all instances).
+// Think of it like a "template": the WndProc, the CLSID, the bound methods/properties.
+// Reference-counted because both the registry and active instances hold pointers to it.
+// UnregisterControl releases the registry's ref; instances release theirs in ~ActiveXControl.
+struct ControlReg_ {
+    LONG refCount = 1; // Registry holds 1, each ActiveXControl instance adds 1
+    std::wstring name;
+    ControlWndProc wndProc;
+    void* defaultUserData;
+    CLSID clsid;
+    DWORD comCookie; // CoRegisterClassObject cookie - needed to unregister
+    std::wstring wndClassName; // "TridentControl_" + name
+    ATOM wndAtom = 0; // RegisterClassEx return value
+    DWORD extraStyle; // Extra WS_ flags for CreateWindowEx
+    CRITICAL_SECTION cs; // Protects the maps below
+    DISPID nextDispId = INT32_MAX; // Method/property IDs count down from here
+    std::map<std::wstring, DISPID> name2id;
+    std::map<DISPID, DispEntry> entries;
+    EventTypeInfo* eventInfo = NULL; // Owns event name->DISPID registry + dispatch ITypeInfo
+    CoclassTypeInfo* coclassInfo = NULL; // Coclass-level ITypeInfo for GetClassInfo()
+    ControlReg_() { InitializeCriticalSection(&cs); }
+    ~ControlReg_() {
+        if (coclassInfo) coclassInfo->Release(); // Release dependent first
+        if (eventInfo) eventInfo->Release();
+        if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(NULL));
+        DeleteCriticalSection(&cs);
+    }
+    void AddRef()  { InterlockedIncrement(&refCount); }
+    void Release() { if (InterlockedDecrement(&refCount) == 0) delete this; }
+};
+
+// Global registry: CLSID -> ControlReg_*. This is how CoCreateInstance finds our factory.
+inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
+    static std::map<CLSID, ControlReg_*, CLSIDCompare> s;
+    return s;
+}
+
+// ControlInstance_ - per-instance data for each <object> tag on a page.
+// If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
+// but they all share the same ControlReg_ (same WndProc, same methods).
+struct ControlInstance_ {
+    ControlReg_* reg = NULL; // Back-pointer to the class registration
+    HWND hwnd = NULL; // The child window we create inside IE
+    void* userData = NULL; // Per-instance user data
+    IOleClientSite* clientSite = NULL; // IE's hosting site for this control
+    IOleAdviseHolder* adviseHolder = NULL;
+    IOleInPlaceSite* inPlaceSite = NULL;
+    bool active = false; // True after DoVerb(INPLACEACTIVATE)
+    bool uiActive = false; // True after DoVerb(UIACTIVATE)
+    RECT rcPos; // Our position inside IE's document
+    SIZEL extent = { 0, 0 }; // Size in HIMETRIC units (IE sends this via SetExtent)
+    std::map<DWORD, IDispatch*> sinks; // Event subscribers (from IConnectionPoint::Advise)
+    DWORD nextCookie = 1; // Cookie counter for Advise/Unadvise
+    DropCallback onDrop = NULL; // Drag-drop callbacks
+    DropEnterCallback onDragEnter = NULL;
+    DropOverCallback onDragOver = NULL;
+    DropLeaveCallback onDragLeave = NULL;
+    bool dropRegistered = false;
 };
 
 class CtrlConnectionPoint;
@@ -1660,7 +1599,14 @@ public:
                     hwndC, NULL, GetModuleHandle(NULL), this);
                 if (pFrame) pFrame->Release();
                 if (pUIWin) pUIWin->Release();
-                if (!m_inst->hwnd) return E_FAIL;
+                if (!m_inst->hwnd) {
+                    // Window creation failed - roll back activation state
+                    IOleObject* pOle2 = NULL;
+                    QueryInterface(IID_IOleObject, (void**)&pOle2);
+                    if (pOle2) { OleLockRunning(pOle2, FALSE, FALSE); pOle2->Release(); }
+                    m_inst->inPlaceSite->OnInPlaceDeactivate();
+                    return E_FAIL;
+                }
                 m_inst->active = true;
             }
             if (iVerb == OLEIVERB_UIACTIVATE && !m_inst->uiActive) {
@@ -1697,6 +1643,7 @@ public:
         return S_OK;
     }
     STDMETHODIMP GetExtent(DWORD, SIZEL* p) override {
+        if (!p) return E_POINTER;
         if (m_inst->extent.cx > 0 && m_inst->extent.cy > 0) {
             *p = m_inst->extent;
         } else {
