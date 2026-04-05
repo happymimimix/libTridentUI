@@ -20,7 +20,7 @@ Every Windows machine since Windows 95 has an HTML rendering engine built in: ms
 the engine behind Internet Explorer). This library creates a Win32 window and stuffs an instance
 of that engine inside it, like putting a browser tab into your app.
 
-The trick is that IE's engine is an "ActiveX control" — a type of COM object that can be embedded
+The trick is that IE's engine is an "ActiveX control" - a type of COM object that can be embedded
 inside another window. To host it, we need to implement a bunch of COM interfaces that the control
 calls back into. Think of it like a plugin system: our app is the host, mshtml is the plugin.
 The plugin says "I need a window to draw in" and we respond with our HWND. It says "give me a
@@ -93,12 +93,12 @@ typedef IHTMLElement* hElement;
 //   JS -> C++ (method calls): rgvarg is reverse-ordered, your callback reads them
 //   C++ -> JS (FireEvent): you pass args in reverse order, JS receives them correctly
 //
-// Example — JS calls window.external.Add(10, 20):
+// Example - JS calls window.external.Add(10, 20):
 //   dp->cArgs = 2
 //   dp->rgvarg[0].lVal = 20  (last arg)
 //   dp->rgvarg[1].lVal = 10  (first arg)
 //
-// Example — C++ fires event with args (42, "hello"):
+// Example - C++ fires event with args (42, "hello"):
 //   VARIANT args[2] = { VarBstr(L"hello"), VarInt(42) };  // reverse order!
 //   FireEvent(c, evtId, args, 2);
 
@@ -108,7 +108,7 @@ typedef ControlInstance_* hControl;
 struct ControlReg_;
 typedef ControlReg_* hControlClass;
 
-// Callback signatures — both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
+// Callback signatures - both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
 // See the DISPPARAMS convention comment above for how to read arguments.
 using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
 using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
@@ -184,19 +184,19 @@ inline IDataObject* CreateTextDataObject(const wchar_t* text);
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
 inline TridentWindowData_* g_trident_head = NULL;
 
-// ExternalDispatch — this is what JavaScript sees as "window.external"
+// ExternalDispatch - this is what JavaScript sees as "window.external"
 //
 // When JS calls window.external.Add(1, 2), here's what happens behind the scenes:
 //   1. IE calls GetIDsOfNames(["Add"]) -> we return a numeric DISPID
 //   2. IE calls Invoke(dispid, args=[1,2]) -> we look up the C++ callback and run it
 //
-// IDispatch is COM's version of "dynamic method lookup" — like a dictionary of
+// IDispatch is COM's version of "dynamic method lookup" - like a dictionary of
 // function pointers, keyed by name. It's how scripting languages talk to COM objects
 // without knowing their C++ class layout at compile time.
 //
 // DISPIDs count DOWN from INT32_MAX. This avoids conflicts with well-known DISPIDs
 // like CYCLECOUNT_VALUE (0), CYCLECOUNT_CYCLECOUNT (-1), CYCLECOUNT_CYCLETIMER (-5), etc.
-// We'll never run out — you'd need 2 billion bindings.
+// We'll never run out - you'd need 2 billion bindings.
 //
 // NOTE: This object lives as a member of OleSite (not heap-allocated separately),
 // so its Release() intentionally does NOT delete this. Its lifetime is tied to OleSite.
@@ -242,7 +242,7 @@ public:
     STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
     STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
     
-    // GetIDsOfNames — IE calls this to convert "Add" -> numeric DISPID.
+    // GetIDsOfNames - IE calls this to convert "Add" -> numeric DISPID.
     // When JS does window.external.Add(1,2), IE first asks us "what's the ID for 'Add'?"
     STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
         HRESULT hr = S_OK;
@@ -260,7 +260,7 @@ public:
         return hr;
     }
     
-    // Invoke — IE calls this with the DISPID from GetIDsOfNames + the JS arguments.
+    // Invoke - IE calls this with the DISPID from GetIDsOfNames + the JS arguments.
     // We look up the C++ callback and call it. Note: we copy the callback THEN unlock
     // the critical section BEFORE calling the user's code. This prevents deadlocks if
     // the user's callback tries to bind more functions.
@@ -277,7 +277,7 @@ public:
     }
 };
 
-// OleSite — the "container" that hosts the IE browser control.
+// OleSite - the "container" that hosts the IE browser control.
 //
 // This is the biggest and most complex class in the library. It implements 7 COM interfaces
 // that IE's engine needs from its host. Think of it as the "other half of a conversation":
@@ -338,7 +338,7 @@ public:
     
     IWebBrowser2* GetBrowser() { return m_pBrowser; }
     
-    // SetupUIHandler — hooks our IDocHostUIHandler into the loaded document.
+    // SetupUIHandler - hooks our IDocHostUIHandler into the loaded document.
     // We have to do this AFTER the page loads because the document object changes on
     // every navigation. The ICustomDoc interface is MSHTML's way of saying "let me swap
     // in a different UI handler for this document".
@@ -355,13 +355,13 @@ public:
         d->Release();
     }
 
-    // Create — the big initialization sequence. This is where we actually create the
+    // Create - the big initialization sequence. This is where we actually create the
     // IE browser control and wire everything together. Here's the step-by-step:
     bool Create(HWND hwnd) {
         m_hwnd = hwnd;
 
         // Step 1: Create the WebBrowser COM object. This is the IE engine itself.
-        // CLSID_WebBrowser is {8856F961-340A-11D0-A96B-00C04FD705A2} — it lives in
+        // CLSID_WebBrowser is {8856F961-340A-11D0-A96B-00C04FD705A2} - it lives in
         // ieframe.dll and has been there since IE3.
         HRESULT hr = CoCreateInstance(CLSID_WebBrowser, NULL, CLSCTX_ALL, IID_IOleObject, (void**)&m_pOle);
         if (FAILED(hr)) return false;
@@ -387,7 +387,7 @@ public:
         if (FAILED(hr)) m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
         m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
-        // Step 5: Activate IE "in place" — this makes it create its child windows inside
+        // Step 5: Activate IE "in place" - this makes it create its child windows inside
         // our HWND and start rendering. OLEIVERB_INPLACEACTIVATE is the command that says
         // "go live inside this rectangle".
         RECT rc;
@@ -404,7 +404,7 @@ public:
             pSite->Release();
         }
 
-        // Step 7: Get the IWebBrowser2 interface — this is our main handle to the browser.
+        // Step 7: Get the IWebBrowser2 interface - this is our main handle to the browser.
         // Through it we can navigate to URLs, get the document object, execute script, etc.
         m_pOle->QueryInterface(IID_IWebBrowser2, (void**)&m_pBrowser);
         if (!m_pBrowser) { Destroy(); return false; }
@@ -415,7 +415,7 @@ public:
         return true;
     }
     
-    // Destroy — disconnects everything and releases COM references.
+    // Destroy - disconnects everything and releases COM references.
     // This must be called before the host window is destroyed, because IE's child windows
     // are parented to our HWND. Calling Close(OLECLOSE_NOSAVE) tells IE to deactivate
     // and tear down its UI. SetClientSite(NULL) breaks the back-pointer so IE won't
@@ -441,7 +441,7 @@ public:
         }
     }
 
-    // QueryInterface — COM's way of asking "do you support interface X?"
+    // QueryInterface - COM's way of asking "do you support interface X?"
     // IE calls this constantly during initialization to discover what we can do.
     // Each interface we return tells IE about a different capability we offer.
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
@@ -465,14 +465,14 @@ public:
 
     // ---- IOleClientSite ----
     // These methods let IE ask us about its hosting environment.
-    // Most are stubs because we're a simple host — we don't save documents,
+    // Most are stubs because we're a simple host - we don't save documents,
     // don't support monikers (persistent object names), etc.
     STDMETHODIMP SaveObject() override { return E_NOTIMPL; }
     STDMETHODIMP GetMoniker(DWORD, DWORD, IMoniker** p) override { if (!p) return E_POINTER; *p = NULL; return E_NOTIMPL; }
     STDMETHODIMP GetContainer(IOleContainer** p) override {
         return QueryInterface(IID_IOleContainer, (void**)p);
     }
-    // ShowObject — IE says "I've just activated, you might want to redraw me"
+    // ShowObject - IE says "I've just activated, you might want to redraw me"
     STDMETHODIMP ShowObject() override {
         if (!m_hwnd || !m_pView) return E_FAIL;
         HDC hDC = ::GetDC(m_hwnd);
@@ -508,7 +508,7 @@ public:
         return OnInPlaceActivateEx(&dummy, 0);
     }
     STDMETHODIMP OnUIActivate() override { m_bUIActivated = true; return S_OK; }
-    // GetWindowContext — IE asks "give me a frame, a UI window, and the rectangles
+    // GetWindowContext - IE asks "give me a frame, a UI window, and the rectangles
     // I can draw in". We provide a dummy InlineFrame (which is basically a no-op
     // implementation of IOleInPlaceFrame), and tell IE it can use our entire client area.
     STDMETHODIMP GetWindowContext(IOleInPlaceFrame** ppFrame, IOleInPlaceUIWindow** ppDoc, LPRECT pPos, LPRECT pClip, LPOLEINPLACEFRAMEINFO pFI) override {
@@ -531,9 +531,9 @@ public:
     STDMETHODIMP DeactivateAndUndo() override { return E_NOTIMPL; }
     STDMETHODIMP OnPosRectChange(LPCRECT) override { return E_NOTIMPL; }
 
-    // OnInPlaceActivateEx — IE is going live inside our window.
+    // OnInPlaceActivateEx - IE is going live inside our window.
     // OleLockRunning prevents the OLE object from being garbage-collected while active.
-    // We try windowless mode first (IE draws directly on our HDC) — if that fails,
+    // We try windowless mode first (IE draws directly on our HDC) - if that fails,
     // we fall back to windowed mode (IE creates its own child HWND).
     STDMETHODIMP OnInPlaceActivateEx(BOOL*, DWORD dwFlags) override {
         if (!m_hwnd || !m_pOle) return E_UNEXPECTED;
@@ -622,11 +622,11 @@ public:
     // This is our main UI customization point. IE calls these to ask how we want
     // the browser to look and behave.
 
-    // ShowContextMenu — return S_OK to BLOCK the default right-click menu.
+    // ShowContextMenu - return S_OK to BLOCK the default right-click menu.
     // Return S_FALSE if you want the default IE menu to appear.
     STDMETHODIMP ShowContextMenu(DWORD, POINT*, IUnknown*, IDispatch*) override { return S_OK; }
 
-    // GetHostInfo — we set NO3DBORDER to get a flat, modern-looking browser area
+    // GetHostInfo - we set NO3DBORDER to get a flat, modern-looking browser area
     // instead of the ugly sunken 3D border from the Windows 95 era.
     STDMETHODIMP GetHostInfo(DOCHOSTUIINFO* p) override {
         if (p) {
@@ -647,7 +647,7 @@ public:
     STDMETHODIMP GetOptionKeyPath(LPOLESTR*, DWORD) override { return S_OK; }
     STDMETHODIMP GetDropTarget(IDropTarget*, IDropTarget**) override { return E_NOTIMPL; }
 
-    // GetExternal — THE KEY METHOD for the JS bridge!
+    // GetExternal - THE KEY METHOD for the JS bridge!
     // When JavaScript calls "window.external", IE calls this to get the IDispatch
     // that represents the external object. We return our ExternalDispatch, which
     // maps JS function calls to C++ callbacks registered via BindFunction().
@@ -657,8 +657,8 @@ public:
         ext.AddRef();
         return S_OK;
     }
-    STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { *pp = NULL; return S_OK; }
-    STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { *pp = NULL; return S_OK; }
+    STDMETHODIMP TranslateUrl(DWORD, LPWSTR, LPWSTR* pp) override { if (pp) *pp = NULL; return S_OK; }
+    STDMETHODIMP FilterDataObject(IDataObject*, IDataObject** pp) override { if (pp) *pp = NULL; return S_OK; }
 
     // ---- IDispatch (for browser events) ----
     // We subscribe to DWebBrowserEvents2 to know when navigation completes.
@@ -675,8 +675,8 @@ public:
     }
 
 private:
-    // ConnectEvents — subscribe/unsubscribe to IE's navigation events.
-    // IE exposes events through "connection points" — a COM pattern where you
+    // ConnectEvents - subscribe/unsubscribe to IE's navigation events.
+    // IE exposes events through "connection points" - a COM pattern where you
     // give IE an IDispatch, and it calls Invoke() on it whenever something happens.
     // We connect to DWebBrowserEvents2 to catch DISPID_DOCUMENTCOMPLETE.
     void ConnectEvents(BOOL advise) {
@@ -768,7 +768,7 @@ private:
     bool m_bLocked;
 };
 
-// TridentWindowData_ — the internal data behind an hTrident handle.
+// TridentWindowData_ - the internal data behind an hTrident handle.
 // This is a node in a doubly-linked list (g_trident_head). Each node owns
 // an OleSite (the COM hosting layer) and optionally a user WndProc and user data.
 struct TridentWindowData_ {
@@ -780,15 +780,7 @@ struct TridentWindowData_ {
     TridentWindowData_* prev = nullptr; // Previous node in the linked list
     TridentWindowData_* next = nullptr; // Next node in the linked list
 };
-// TridentHostWndProc — the Win32 window procedure for the host window.
-// This handles window lifecycle and routes messages:
-//   - WM_NCCREATE: associate our TridentWindowData_ with the HWND
-//   - WM_SIZE: tell the embedded IE control about the new size
-//   - WM_CLOSE: trigger window destruction (cleanup happens in WM_NCDESTROY)
-//   - WM_NCDESTROY: the LAST message a window receives — we clean up everything here
-//     (destroy the OLE site, remove from the window chain, delete the data struct).
-//     This is the safe place to free resources because no more messages will arrive.
-// TridentHostWndProc — the window procedure for our host window.
+// TridentHostWndProc - the Win32 window procedure for the host window.
 //
 // Message flow:
 //   1. User's WndProc gets first crack (if set via SetWndProc). If it sets handled=true, we stop.
@@ -797,7 +789,7 @@ struct TridentWindowData_ {
 //   4. WM_NCDESTROY -> THE cleanup handler. This is the LAST message a window ever receives.
 //      We clear GWLP_USERDATA (so NavigateToHTML can detect "window is gone"),
 //      destroy the OLE site, remove from the linked list, and delete h.
-//      After this point, the hTrident handle is INVALID — using it is undefined behavior.
+//      After this point, the hTrident handle is INVALID - using it is undefined behavior.
 inline LRESULT CALLBACK TridentHostWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
@@ -856,15 +848,17 @@ inline void TridentShutdown() {
     OleUninitialize();
 }
 
-// RunMessageLoop — standard Win32 message loop with IE keyboard handling.
+// RunMessageLoop - standard Win32 message loop with IE keyboard handling.
 // IE needs to process Tab, Enter, Ctrl+C, etc. through its own TranslateAccelerator.
 // Without this, keyboard input in the browser would be broken (you couldn't tab
 // between form fields, copy text, etc.). We check IsChild to make sure we only
-// send keystrokes to the window that actually owns the focused control — otherwise
+// send keystrokes to the window that actually owns the focused control - otherwise
 // a background window could steal keys from the foreground window.
 inline void RunMessageLoop() {
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
+    BOOL bRet;
+    while ((bRet = GetMessage(&msg, NULL, 0, 0)) != 0) {
+        if (bRet == -1) break; // GetMessage error - bail out
         bool ate = false;
         for (TridentWindowData_* p = g_trident_head; p; ) {
             TridentWindowData_* next = p->next;
@@ -904,7 +898,7 @@ inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int 
         return NULL;
     }
     // Insert at head of doubly-linked list
-    d->prev = NULL;
+    d->prev = nullptr;
     d->next = g_trident_head;
     if (g_trident_head) g_trident_head->prev = d;
     g_trident_head = d;
@@ -960,7 +954,7 @@ inline void NavigateToRes(hTrident h, const wchar_t* resName) {
     NavigateTo(h, url.c_str());
 }
 
-// NavigateToHTML — loads an HTML string directly into the browser.
+// NavigateToHTML - loads an HTML string directly into the browser.
 //
 // This is trickier than you'd think. IE doesn't have a simple "load this string" API.
 // Instead, we have to:
@@ -971,37 +965,22 @@ inline void NavigateToRes(hTrident h, const wchar_t* resName) {
 //   5. Call document.close() to finalize
 //
 // The message pump in step 2 is dangerous: while we're pumping, ANY Windows message
-// can fire — including WM_CLOSE, which would destroy our window and delete h.
+// can fire - including WM_CLOSE, which would destroy our window and delete h.
 // That's why we:
 //   - AddRef the browser to keep it alive during the pump
 //   - Save hwnd to a local variable (safe even after h is deleted)
 //   - Check IsWindow(hwnd) in the loop (if window died, bail out)
 //   - Re-fetch h from GWLP_USERDATA after the loop (if it's 0, h was deleted)
-// NavigateToHTML — loads an HTML string into the browser.
-//
-// There's no "load this string directly" API in IE. The workaround:
-//   1. Navigate to about:blank (creates an empty document)
-//   2. Wait for it to finish loading (pump messages while waiting)
-//   3. Get the IHTMLDocument2 interface from the loaded document
-//   4. Call document.write(html) to replace the content
-//   5. Call document.close() to finish
-//
-// The message pumping (step 2) is dangerous: while we pump, ANY message can be
-// processed — including WM_CLOSE, which would destroy h. To survive this:
-//   - We AddRef the browser (so it doesn't get freed under us)
-//   - We save hwnd on the stack (so we can call IsWindow without touching h)
-//   - After the pump, we re-fetch h from GWLP_USERDATA (which WM_NCDESTROY clears to 0)
-//   - If h is NULL, the window was destroyed during the pump, so we bail
 inline void NavigateToHTML(hTrident h, const wchar_t* html) {
     IWebBrowser2* b = GetTridentBrowser(h);
     if (!b) return;
     b->AddRef(); // prevent browser from being freed during pump
-    HWND hwnd = GetTridentHWND(h); // stack copy — safe even if h is deleted
+    HWND hwnd = GetTridentHWND(h); // stack copy - safe even if h is deleted
     
     NavigateTo(h, L"about:blank");
     
     // Pump messages until about:blank is fully loaded.
-    // We can't touch h during this loop — it might get deleted by WM_NCDESTROY!
+    // We can't touch h during this loop - it might get deleted by WM_NCDESTROY!
     READYSTATE st;
     while (SUCCEEDED(b->get_ReadyState(&st)) && st != READYSTATE_COMPLETE) {
         if (!IsWindow(hwnd)) { b->Release(); return; } // window destroyed during pump
@@ -1035,7 +1014,7 @@ inline void NavigateToHTML(hTrident h, const wchar_t* html) {
         pv->bstrVal = SysAllocString(html);
         SafeArrayUnaccessData(sa);
         doc->write(sa);
-        doc->close(); // Finalize the document — like closing a file after writing
+        doc->close(); // Finalize the document - like closing a file after writing
         SafeArrayDestroy(sa);
         doc->Release();
     }
@@ -1213,7 +1192,7 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 //   ActiveXControl = "IE hosts OUR ActiveX control inside its page"
 //
 // How it works:
-//   1. You call RegisterControl("MyWidget", myWndProc) — this registers a COM
+//   1. You call RegisterControl("MyWidget", myWndProc) - this registers a COM
 //      class factory in memory (no registry!) using CoRegisterClassObject.
 //   2. You get back a deterministic CLSID generated from the name hash.
 //   3. In your HTML: <object classid="clsid:{that-guid}" width="300" height="200">
@@ -1237,7 +1216,7 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 //   IProvideClassInfo2      - Tells IE which outbound event interface to use
 //
 
-// CLSIDFromName — generates a deterministic GUID from a control name using FNV-1a hash.
+// CLSIDFromName - generates a deterministic GUID from a control name using FNV-1a hash.
 // Same name always produces the same CLSID, so you can hardcode it in HTML.
 inline CLSID CLSIDFromName(const wchar_t* name) {
     CLSID c = {};
@@ -1270,7 +1249,7 @@ struct DispEntry {
     PropertySetter setter;
 };
 
-// ControlReg_ — stores everything about a registered control CLASS (shared by all instances).
+// ControlReg_ - stores everything about a registered control CLASS (shared by all instances).
 // Think of it like a "template": the WndProc, the CLSID, the bound methods/properties.
 // Reference-counted because both the registry and active instances hold pointers to it.
 // UnregisterControl releases the registry's ref; instances release theirs in ~ActiveXControl.
@@ -1280,7 +1259,7 @@ struct ControlReg_ {
     ControlWndProc wndProc;
     void* defaultUserData;
     CLSID clsid;
-    DWORD comCookie; // CoRegisterClassObject cookie — needed to unregister
+    DWORD comCookie; // CoRegisterClassObject cookie - needed to unregister
     std::wstring wndClassName; // "TridentControl_" + name
     ATOM wndAtom = 0; // RegisterClassEx return value
     DWORD extraStyle; // Extra WS_ flags for CreateWindowEx
@@ -1288,10 +1267,12 @@ struct ControlReg_ {
     DISPID nextDispId = INT32_MAX; // Method/property IDs count down from here
     std::map<std::wstring, DISPID> name2id;
     std::map<DISPID, DispEntry> entries;
-    DISPID nextEventId = INT32_MAX; // Event IDs also count down (separate counter)
-    std::map<std::wstring, DISPID> eventName2Id;
+    EventTypeInfo* eventInfo = NULL;     // Owns event name->DISPID registry + dispatch ITypeInfo
+    CoclassTypeInfo* coclassInfo = NULL; // Coclass-level ITypeInfo for GetClassInfo()
     ControlReg_() { InitializeCriticalSection(&cs); }
     ~ControlReg_() {
+        if (coclassInfo) coclassInfo->Release();  // Release dependent first
+        if (eventInfo) eventInfo->Release();
         if (wndAtom) UnregisterClassW(wndClassName.c_str(), GetModuleHandle(NULL));
         DeleteCriticalSection(&cs);
     }
@@ -1305,7 +1286,7 @@ inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
     return s;
 }
 
-// ControlInstance_ — per-instance data for each <object> tag on a page.
+// ControlInstance_ - per-instance data for each <object> tag on a page.
 // If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
 // but they all share the same ControlReg_ (same WndProc, same methods).
 struct ControlInstance_ {
@@ -1326,6 +1307,235 @@ struct ControlInstance_ {
     DropOverCallback onDragOver = NULL;
     DropLeaveCallback onDragLeave = NULL;
     bool dropRegistered = false;
+};
+
+// EventTypeInfo - ITypeInfo for the outgoing event dispatch interface.
+//
+// This is half of the type info system that makes IE's native attachEvent() work.
+// It describes our event interface as TKIND_DISPATCH and provides GetIDsOfNames()
+// to map event names like "OnClick" to DISPIDs.
+//
+// It also implements GetFuncDesc (enumerate events by index) and GetNames
+// (reverse-lookup DISPID -> name) for richer type info support.
+//
+// Event name -> DISPID registry lives here (moved from ControlReg_).
+// RegisterEvent() adds events, GetEventId() looks them up for FireEventByName.
+//
+// IE's attachEvent("OnClick", handler) flow:
+//   1. IE gets CoclassTypeInfo via GetClassInfo()
+//   2. IE finds the [source,default] impl type -> navigates to THIS EventTypeInfo
+//   3. IE calls GetIDsOfNames("OnClick") -> gets the DISPID
+//   4. IE calls IConnectionPoint::Advise with a sink that maps that DISPID to the JS handler
+//   5. C++ calls FireEvent(ctrl, dispid) -> iterates sinks -> IE routes to JS handler
+class EventTypeInfo : public ITypeInfo {
+    LONG m_ref;
+    CRITICAL_SECTION m_cs;
+    CLSID m_clsid;
+    DISPID m_nextId;
+    std::map<std::wstring, DISPID> m_name2id;
+    std::map<DISPID, std::wstring> m_id2name; // Reverse lookup for GetNames
+    std::vector<DISPID> m_orderedIds; // Ordered list for GetFuncDesc by index
+public:
+    EventTypeInfo(const CLSID& clsid) : m_ref(1), m_clsid(clsid), m_nextId(INT32_MAX) {
+        InitializeCriticalSection(&m_cs);
+    }
+    ~EventTypeInfo() { DeleteCriticalSection(&m_cs); }
+
+    // Register a new event name, returns its DISPID. Idempotent for same name.
+    DISPID RegisterEvent(const wchar_t* name) {
+        EnterCriticalSection(&m_cs);
+        auto it = m_name2id.find(name);
+        if (it != m_name2id.end()) { DISPID d = it->second; LeaveCriticalSection(&m_cs); return d; }
+        if (m_nextId <= 0) { LeaveCriticalSection(&m_cs); return DISPID_UNKNOWN; }
+        DISPID id = m_nextId--;
+        m_name2id[name] = id;
+        m_id2name[id] = name;
+        m_orderedIds.push_back(id);
+        LeaveCriticalSection(&m_cs);
+        return id;
+    }
+
+    // Look up event DISPID by name. Returns DISPID_UNKNOWN if not found.
+    DISPID GetEventId(const wchar_t* name) {
+        EnterCriticalSection(&m_cs);
+        auto it = m_name2id.find(name);
+        DISPID id = (it != m_name2id.end()) ? it->second : DISPID_UNKNOWN;
+        LeaveCriticalSection(&m_cs);
+        return id;
+    }
+
+    // ---- IUnknown ----
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_ITypeInfo) { *ppv = this; AddRef(); return S_OK; }
+        *ppv = NULL; return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+
+    // ---- ITypeInfo - the methods IE actually calls for attachEvent ----
+
+    // GetTypeAttr - describe ourselves as a dispatch interface for outgoing events.
+    STDMETHODIMP GetTypeAttr(TYPEATTR** pp) override {
+        if (!pp) return E_POINTER;
+        TYPEATTR* ta = (TYPEATTR*)CoTaskMemAlloc(sizeof(TYPEATTR));
+        if (!ta) return E_OUTOFMEMORY;
+        memset(ta, 0, sizeof(TYPEATTR));
+        ta->guid = IID_IDispatch;
+        ta->typekind = TKIND_DISPATCH;
+        ta->cbSizeVft = sizeof(IDispatchVtbl);
+        ta->wTypeFlags = TYPEFLAG_FDISPATCHABLE;
+        EnterCriticalSection(&m_cs);
+        ta->cFuncs = (WORD)m_name2id.size();
+        LeaveCriticalSection(&m_cs);
+        *pp = ta;
+        return S_OK;
+    }
+    STDMETHODIMP ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+
+    // GetFuncDesc - describe event N as a dispinterface method.
+    // IE might call this to enumerate all events on the source interface.
+    STDMETHODIMP GetFuncDesc(UINT index, FUNCDESC** ppDesc) override {
+        if (!ppDesc) return E_POINTER;
+        EnterCriticalSection(&m_cs);
+        if (index >= m_orderedIds.size()) { LeaveCriticalSection(&m_cs); return TYPE_E_ELEMENTNOTFOUND; }
+        DISPID id = m_orderedIds[index];
+        LeaveCriticalSection(&m_cs);
+        FUNCDESC* fd = (FUNCDESC*)CoTaskMemAlloc(sizeof(FUNCDESC));
+        if (!fd) return E_OUTOFMEMORY;
+        memset(fd, 0, sizeof(FUNCDESC));
+        fd->memid = id;
+        fd->funckind = FUNC_DISPATCH;
+        fd->invkind = INVOKE_FUNC;
+        fd->callconv = CC_STDCALL;
+        fd->elemdescFunc.tdesc.vt = VT_VOID;
+        fd->cParams = 0;
+        fd->wFuncFlags = 0;
+        *ppDesc = fd;
+        return S_OK;
+    }
+    STDMETHODIMP ReleaseFuncDesc(FUNCDESC* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+
+    // GetNames - reverse-lookup DISPID -> event name.
+    STDMETHODIMP GetNames(MEMBERID id, BSTR* names, UINT maxNames, UINT* pcNames) override {
+        if (!names || !pcNames) return E_POINTER;
+        *pcNames = 0;
+        if (maxNames == 0) return S_OK;
+        EnterCriticalSection(&m_cs);
+        auto it = m_id2name.find(id);
+        if (it == m_id2name.end()) { LeaveCriticalSection(&m_cs); return TYPE_E_ELEMENTNOTFOUND; }
+        names[0] = SysAllocString(it->second.c_str());
+        LeaveCriticalSection(&m_cs);
+        *pcNames = 1;
+        return S_OK;
+    }
+
+    // GetIDsOfNames - THE key method. Maps "OnClick" -> DISPID for attachEvent.
+    STDMETHODIMP GetIDsOfNames(LPOLESTR* names, UINT cnt, MEMBERID* ids) override {
+        HRESULT hr = S_OK;
+        EnterCriticalSection(&m_cs);
+        for (UINT i = 0; i < cnt; i++) {
+            auto it = m_name2id.find(names[i]);
+            if (it != m_name2id.end()) {
+                ids[i] = it->second;
+            } else {
+                ids[i] = MEMBERID_NIL;
+                hr = DISP_E_UNKNOWNNAME;
+            }
+        }
+        LeaveCriticalSection(&m_cs);
+        return hr;
+    }
+
+    // ---- ITypeInfo stubs - not needed for attachEvent ----
+    STDMETHODIMP GetTypeComp(ITypeComp**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetVarDesc(UINT, VARDESC**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetRefTypeOfImplType(UINT, HREFTYPE*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetRefTypeInfo(HREFTYPE, ITypeInfo**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetImplTypeFlags(UINT, INT*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetDocumentation(MEMBERID, BSTR*, BSTR*, DWORD*, BSTR*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetDllEntry(MEMBERID, INVOKEKIND, BSTR*, BSTR*, WORD*) override { return E_NOTIMPL; }
+    STDMETHODIMP Invoke(void*, MEMBERID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override { return E_NOTIMPL; }
+    STDMETHODIMP AddressOfMember(MEMBERID, INVOKEKIND, void**) override { return E_NOTIMPL; }
+    STDMETHODIMP CreateInstance(IUnknown*, REFIID, void**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetMops(MEMBERID, BSTR*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetContainingTypeLib(ITypeLib**, UINT*) override { return E_NOTIMPL; }
+    STDMETHODIMP ReleaseVarDesc(VARDESC*) override { return S_OK; }
+};
+
+// CoclassTypeInfo - coclass-level ITypeInfo that navigates IE to EventTypeInfo.
+//
+// IE's attachEvent navigates: coclass -> [source,default] impl type -> event ITypeInfo.
+// This class represents the coclass level. It has one impl type (our EventTypeInfo)
+// flagged as IMPLTYPEFLAG_FSOURCE | IMPLTYPEFLAG_FDEFAULT.
+// When IE calls GetRefTypeInfo(), we return the EventTypeInfo.
+class CoclassTypeInfo : public ITypeInfo {
+    LONG m_ref;
+    CLSID m_clsid;
+    EventTypeInfo* m_eventTI; // Strong reference (AddRef'd)
+public:
+    CoclassTypeInfo(const CLSID& clsid, EventTypeInfo* eti)
+        : m_ref(1), m_clsid(clsid), m_eventTI(eti) { if (m_eventTI) m_eventTI->AddRef(); }
+    ~CoclassTypeInfo() { if (m_eventTI) m_eventTI->Release(); }
+
+    STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+        if (riid == IID_IUnknown || riid == IID_ITypeInfo) { *ppv = this; AddRef(); return S_OK; }
+        *ppv = NULL; return E_NOINTERFACE;
+    }
+    STDMETHODIMP_(ULONG) AddRef()  override { return InterlockedIncrement(&m_ref); }
+    STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+
+    // GetTypeAttr - we're a coclass with 1 impl type (the source event interface)
+    STDMETHODIMP GetTypeAttr(TYPEATTR** pp) override {
+        if (!pp) return E_POINTER;
+        TYPEATTR* ta = (TYPEATTR*)CoTaskMemAlloc(sizeof(TYPEATTR));
+        if (!ta) return E_OUTOFMEMORY;
+        memset(ta, 0, sizeof(TYPEATTR));
+        ta->guid = m_clsid;
+        ta->typekind = TKIND_COCLASS;
+        ta->cImplTypes = 1;
+        *pp = ta;
+        return S_OK;
+    }
+    STDMETHODIMP ReleaseTypeAttr(TYPEATTR* p) override { if (p) CoTaskMemFree(p); return S_OK; }
+
+    // GetImplTypeFlags - our one impl type is [source, default]
+    STDMETHODIMP GetImplTypeFlags(UINT index, INT* flags) override {
+        if (index != 0 || !flags) return TYPE_E_ELEMENTNOTFOUND;
+        *flags = IMPLTYPEFLAG_FDEFAULT | IMPLTYPEFLAG_FSOURCE;
+        return S_OK;
+    }
+
+    // GetRefTypeOfImplType - return a handle for our source interface
+    STDMETHODIMP GetRefTypeOfImplType(UINT index, HREFTYPE* pRef) override {
+        if (index != 0 || !pRef) return TYPE_E_ELEMENTNOTFOUND;
+        *pRef = 1;
+        return S_OK;
+    }
+
+    // GetRefTypeInfo - given the handle, return the EventTypeInfo
+    STDMETHODIMP GetRefTypeInfo(HREFTYPE ref, ITypeInfo** ppTI) override {
+        if (!ppTI) return E_POINTER;
+        if (ref != 1 || !m_eventTI) { *ppTI = NULL; return E_INVALIDARG; }
+        *ppTI = m_eventTI;
+        m_eventTI->AddRef();
+        return S_OK;
+    }
+
+    // Stubs - not needed at the coclass level
+    STDMETHODIMP GetTypeComp(ITypeComp**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetFuncDesc(UINT, FUNCDESC**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetVarDesc(UINT, VARDESC**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetNames(MEMBERID, BSTR*, UINT, UINT*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetIDsOfNames(LPOLESTR*, UINT, MEMBERID*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetDocumentation(MEMBERID, BSTR*, BSTR*, DWORD*, BSTR*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetDllEntry(MEMBERID, INVOKEKIND, BSTR*, BSTR*, WORD*) override { return E_NOTIMPL; }
+    STDMETHODIMP Invoke(void*, MEMBERID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override { return E_NOTIMPL; }
+    STDMETHODIMP AddressOfMember(MEMBERID, INVOKEKIND, void**) override { return E_NOTIMPL; }
+    STDMETHODIMP CreateInstance(IUnknown*, REFIID, void**) override { return E_NOTIMPL; }
+    STDMETHODIMP GetMops(MEMBERID, BSTR*) override { return E_NOTIMPL; }
+    STDMETHODIMP GetContainingTypeLib(ITypeLib**, UINT*) override { return E_NOTIMPL; }
+    STDMETHODIMP ReleaseFuncDesc(FUNCDESC*) override { return S_OK; }
+    STDMETHODIMP ReleaseVarDesc(VARDESC*) override { return S_OK; }
 };
 
 class CtrlConnectionPoint;
@@ -1382,7 +1592,7 @@ public:
 
     // IOleObject
     STDMETHODIMP SetClientSite(IOleClientSite* p) override { if (m_inst->clientSite) m_inst->clientSite->Release(); m_inst->clientSite = p; if (p) p->AddRef(); return S_OK; }
-    STDMETHODIMP GetClientSite(IOleClientSite** pp) override { *pp = m_inst->clientSite; if (*pp) (*pp)->AddRef(); return S_OK; }
+    STDMETHODIMP GetClientSite(IOleClientSite** pp) override { if (!pp) return E_POINTER; *pp = m_inst->clientSite; if (*pp) (*pp)->AddRef(); return S_OK; }
     STDMETHODIMP SetHostNames(LPCOLESTR, LPCOLESTR) override { return S_OK; }
     STDMETHODIMP Close(DWORD) override { if (m_inst->active) InPlaceDeactivate(); return S_OK; }
     STDMETHODIMP SetMoniker(DWORD, IMoniker*) override { return E_NOTIMPL; }
@@ -1390,7 +1600,7 @@ public:
     STDMETHODIMP InitFromData(IDataObject*, BOOL, DWORD) override { return E_NOTIMPL; }
     STDMETHODIMP GetClipboardData(DWORD, IDataObject**) override { return E_NOTIMPL; }
 
-    // DoVerb — IE tells us to activate. This is where our control comes alive.
+    // DoVerb - IE tells us to activate. This is where our control comes alive.
     //
     // When IE encounters <object classid="..."> in HTML, it creates our ActiveXControl
     // via the class factory, then calls DoVerb(OLEIVERB_INPLACEACTIVATE).
@@ -1401,21 +1611,10 @@ public:
     //   2. Ask permission to activate: CanInPlaceActivate() + OnInPlaceActivate()
     //   3. Lock ourselves as "running" so COM doesn't garbage-collect us
     //   4. Get the container window and the rectangle we should occupy
-    //   5. Handle zero-size rect (IE sometimes gives us position but no size yet —
+    //   5. Handle zero-size rect (IE sometimes gives us position but no size yet -
     //      fall back to the HIMETRIC extent that SetExtent() stored earlier)
     //   6. Register a Win32 window class and create a child window
     //   7. Our CtrlWndProc routes messages to the user's ControlWndProc callback
-    // DoVerb — IE says "activate yourself". This is where our control comes to life.
-    //
-    // The activation sequence:
-    //   1. Get IOleInPlaceSite from IE (the site that will host our window)
-    //   2. Ask permission: CanInPlaceActivate? OnInPlaceActivate!
-    //   3. Lock ourselves running (prevent premature garbage collection)
-    //   4. Get the container window and position from IE
-    //   5. If IE gave us a zero-size rect (common!), use the HIMETRIC extent
-    //      that IE set earlier via SetExtent (from the HTML width/height attributes)
-    //   6. Register a Win32 window class and create our child window inside IE
-    //   7. The user's WndProc starts receiving WM_PAINT, mouse clicks, etc.
     STDMETHODIMP DoVerb(LONG iVerb, LPMSG, IOleClientSite*, LONG, HWND hwndParent, LPCRECT prc) override {
         if (iVerb == OLEIVERB_INPLACEACTIVATE || iVerb == OLEIVERB_UIACTIVATE || iVerb == OLEIVERB_SHOW) {
             if (!m_inst->active) {
@@ -1459,9 +1658,10 @@ public:
                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | m_inst->reg->extraStyle,
                     rcPos.left, rcPos.top, rcPos.right - rcPos.left, rcPos.bottom - rcPos.top,
                     hwndC, NULL, GetModuleHandle(NULL), this);
-                m_inst->active = true;
                 if (pFrame) pFrame->Release();
                 if (pUIWin) pUIWin->Release();
+                if (!m_inst->hwnd) return E_FAIL;
+                m_inst->active = true;
             }
             if (iVerb == OLEIVERB_UIACTIVATE && !m_inst->uiActive) {
                 m_inst->uiActive = true;
@@ -1480,9 +1680,9 @@ public:
     STDMETHODIMP EnumVerbs(IEnumOLEVERB**) override { return E_NOTIMPL; }
     STDMETHODIMP Update() override { return S_OK; }
     STDMETHODIMP IsUpToDate() override { return S_OK; }
-    STDMETHODIMP GetUserClassID(CLSID* p) override { *p = m_inst->reg->clsid; return S_OK; }
+    STDMETHODIMP GetUserClassID(CLSID* p) override { if (!p) return E_POINTER; *p = m_inst->reg->clsid; return S_OK; }
     STDMETHODIMP GetUserType(DWORD, LPOLESTR*) override { return E_NOTIMPL; }
-    // SetExtent — IE tells us how big we should be, in HIMETRIC units (1 HIMETRIC = 0.01mm).
+    // SetExtent - IE tells us how big we should be, in HIMETRIC units (1 HIMETRIC = 0.01mm).
     // This gets called BEFORE DoVerb, from the HTML width/height attributes.
     // We store it so DoVerb can use it as fallback when IE gives us a zero-size rect.
     // Conversion: pixels = HIMETRIC * 96 / 2540 (at standard 96 DPI)
@@ -1512,6 +1712,7 @@ public:
     STDMETHODIMP Unadvise(DWORD c) override { return m_inst->adviseHolder ? m_inst->adviseHolder->Unadvise(c) : E_FAIL; }
     STDMETHODIMP EnumAdvise(IEnumSTATDATA** p) override { return m_inst->adviseHolder ? m_inst->adviseHolder->EnumAdvise(p) : E_FAIL; }
     STDMETHODIMP GetMiscStatus(DWORD, DWORD* p) override {
+        if (!p) return E_POINTER;
         *p = OLEMISC_RECOMPOSEONRESIZE | OLEMISC_INSIDEOUT | OLEMISC_ACTIVATEWHENVISIBLE | OLEMISC_SETCLIENTSITEFIRST;
         return S_OK;
     }
@@ -1600,21 +1801,29 @@ public:
     // ---- IObjectSafety ----
     // IE asks "are you safe to run without security warnings?"
     // We say YES to both UNTRUSTED_CALLER (safe for scripting) and UNTRUSTED_DATA
-    // (safe for initialization). This is pure self-declaration — there's no
+    // (safe for initialization). This is pure self-declaration - there's no
     // verification, no signature, no certificate. This is literally why ActiveX
     // got such a bad security reputation: any control can say "trust me" and IE believes it.
     // For us it's fine because our controls run in our own process, not from the internet.
     STDMETHODIMP GetInterfaceSafetyOptions(REFIID, DWORD* sup, DWORD* en) override {
+        if (!sup || !en) return E_POINTER;
         *sup = *en = INTERFACESAFE_FOR_UNTRUSTED_CALLER | INTERFACESAFE_FOR_UNTRUSTED_DATA;
         return S_OK;
     }
     STDMETHODIMP SetInterfaceSafetyOptions(REFIID, DWORD, DWORD) override { return S_OK; }
 
     // ---- IProvideClassInfo2 ----
-    // IE uses this to find out which interface our outbound events use.
-    // GetGUID(GUIDKIND_DEFAULT_SOURCE_DISP_IID) tells IE "my events come through IDispatch".
-    // Without this, IE's attachEvent() can't find our connection point.
-    STDMETHODIMP GetClassInfo(ITypeInfo**) override { return E_NOTIMPL; } // No type library
+    // GetClassInfo returns our CoclassTypeInfo. IE navigates:
+    //   coclass (TKIND_COCLASS) -> impl type [source,default] -> EventTypeInfo (TKIND_DISPATCH)
+    //   -> GetIDsOfNames("OnClick") -> DISPID
+    // This enables IE's native attachEvent() to discover our custom event DISPIDs.
+    STDMETHODIMP GetClassInfo(ITypeInfo** ppTI) override {
+        if (!ppTI) return E_POINTER;
+        if (!m_inst->reg->coclassInfo) { *ppTI = NULL; return E_NOTIMPL; }
+        *ppTI = m_inst->reg->coclassInfo;
+        m_inst->reg->coclassInfo->AddRef();
+        return S_OK;
+    }
     STDMETHODIMP GetGUID(DWORD dwGuidKind, GUID* pGUID) override {
         if (!pGUID) return E_POINTER;
         if (dwGuidKind == GUIDKIND_DEFAULT_SOURCE_DISP_IID) { *pGUID = IID_IDispatch; return S_OK; }
@@ -1700,7 +1909,7 @@ public:
     STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 };
 
-// CtrlWndProc — the internal window procedure for ActiveX control child windows.
+// CtrlWndProc - the internal window procedure for ActiveX control child windows.
 // This is the bridge between Win32 messages and the user's ControlWndProc callback.
 // The ActiveXControl* is stored in GWLP_USERDATA at WM_NCCREATE time.
 // We clear it in WM_NCDESTROY to prevent dangling pointer access.
@@ -1722,26 +1931,17 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProc(hwnd, msg, wp, lp);
 }
 
-// CtrlConnectionPoint — handles the "outbound event" subscription.
+// CtrlConnectionPoint - handles event subscriptions.
 //
 // COM events work through "connection points": the control says "I fire events through
-// IDispatch", and IE says "here's my IDispatch sink — call Invoke() on it when something
-// happens". IE subscribes via Advise(), unsubscribes via Unadvise().
-//
-// When your C++ code calls FireEvent(), it iterates over all subscribed sinks and calls
-// Invoke() on each one. That's how events flow from C++ -> JavaScript.
-//
-// This object holds a strong reference (AddRef) to the parent ActiveXControl via m_pCPC,
-// ensuring the control stays alive as long as anyone holds this connection point.
-// CtrlConnectionPoint — handles event subscriptions from JavaScript.
-//
-// When JS does obj.attachEvent("OnClick", handler), IE calls:
+// IDispatch", and IE says "here's my IDispatch sink - call Invoke() on it when something
+// happens". When JS does obj.attachEvent("OnClick", handler), IE calls:
 //   1. FindConnectionPoint(IID_IDispatch) -> gets a CtrlConnectionPoint
 //   2. Advise(handler_dispatch) -> we store the handler in our sink list
 //
-// When C++ calls FireEvent(), we iterate all stored sinks and call Invoke() on each.
-// The connection point AddRef's the parent ActiveXControl (via m_pCPC) so the control
-// stays alive as long as someone holds a connection point reference.
+// When C++ calls FireEvent(), it iterates all sinks and calls Invoke() on each.
+// This object holds a strong reference (AddRef) to the parent ActiveXControl via m_pCPC,
+// ensuring the control stays alive as long as anyone holds this connection point.
 class CtrlConnectionPoint : public IConnectionPoint {
     LONG m_ref; ControlInstance_* m_inst;
     IConnectionPointContainer* m_pCPC;
@@ -1766,6 +1966,7 @@ public:
         return r;
     }
     STDMETHODIMP GetConnectionInterface(IID* p) override {
+        if (!p) return E_POINTER;
         *p = IID_IDispatch;
         return S_OK;
     }
@@ -1803,19 +2004,12 @@ inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnection
     return CONNECT_E_NOCONNECTION;
 }
 
-// CtrlClassFactory — creates instances of our ActiveX controls.
+// CtrlClassFactory - creates ActiveXControl instances when IE encounters <object> tags.
 //
 // When IE sees <object classid="clsid:{...}">, it calls CoCreateInstance with that CLSID.
 // COM looks up the class factory we registered (via CoRegisterClassObject in RegisterControl),
 // and calls CreateInstance() on it. We create a new ActiveXControl and return it.
-//
-// This is a pure in-memory registration — no registry entries are written. The registration
-// only lives as long as our process. When the process exits, it vanishes automatically.
-// CtrlClassFactory — creates ActiveXControl instances when IE encounters <object> tags.
-//
-// We register this with CoRegisterClassObject (in-memory, no registry!).
-// When IE sees <object classid="clsid:{our-guid}">, COM calls our CreateInstance(),
-// and we return a fresh ActiveXControl. This is how COM's "virtual constructor" works.
+// This is a pure in-memory registration - no registry entries are written.
 class CtrlClassFactory : public IClassFactory {
     LONG m_ref; ControlReg_* m_reg;
 public:
@@ -1844,11 +2038,8 @@ public:
     STDMETHODIMP LockServer(BOOL) override { return S_OK; }
 };
 
-// SimpleDataObject — a minimal IDataObject that holds Unicode text.
-// Used for OLE drag & drop: call CreateTextDataObject("hello") to get an IDataObject,
-// then pass it to DoDragDrop(). The drop target can retrieve the text via GetData().
-// SimpleDataObject — a minimal IDataObject that holds Unicode text.
-// Used with DoDragDrop() to drag text out of a control. Usage:
+// SimpleDataObject - a minimal IDataObject that holds Unicode text.
+// Used for OLE drag & drop. Usage:
 //   IDataObject* pDO = CreateTextDataObject(L"hello");
 //   DWORD effect;
 //   DoDragDrop(pDO, pDropSource, DROPEFFECT_COPY, &effect);
@@ -1903,8 +2094,8 @@ inline std::wstring CLSIDToString(const CLSID& clsid) { wchar_t buf[64]; StringF
 inline std::wstring GetControlClassId(hControlClass reg) { return reg ? L"clsid:" + CLSIDToString(reg->clsid) : L""; }
 inline CLSID GetControlCLSID(hControlClass reg) { return reg ? reg->clsid : CLSID_NULL; }
 
-// RegisterControl — the main entry point for creating a new control type.
-// This does NOT create a control instance — it registers a "class" that IE can
+// RegisterControl - the main entry point for creating a new control type.
+// This does NOT create a control instance - it registers a "class" that IE can
 // instantiate later when it encounters an <object> tag with the matching CLSID.
 // The CLSID is deterministic: same name always produces the same GUID.
 inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData, DWORD style) {
@@ -1918,6 +2109,8 @@ inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, v
     reg->extraStyle = style;
     reg->wndClassName = std::wstring(L"TridentControl_") + name;
     reg->clsid = clsid;
+    reg->eventInfo = new EventTypeInfo(clsid);
+    reg->coclassInfo = new CoclassTypeInfo(clsid, reg->eventInfo);
     auto* factory = new CtrlClassFactory(reg);
     HRESULT hr = CoRegisterClassObject(reg->clsid, factory, CLSCTX_INPROC_SERVER, REGCLS_MULTIPLEUSE, &reg->comCookie);
     factory->Release();
@@ -1984,23 +2177,11 @@ inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGe
 }
 
 inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name) {
-    if (!reg) return DISPID_UNKNOWN;
-    EnterCriticalSection(&reg->cs);
-    if (reg->eventName2Id.count(name)) {
-        DISPID existing = reg->eventName2Id[name];
-        LeaveCriticalSection(&reg->cs); return existing;
-    }
-    if (reg->nextEventId <= 0) {
-        LeaveCriticalSection(&reg->cs);
-        return DISPID_UNKNOWN;
-    }
-    DISPID id = reg->nextEventId--;
-    reg->eventName2Id[name] = id;
-    LeaveCriticalSection(&reg->cs);
-    return id;
+    if (!reg || !reg->eventInfo) return DISPID_UNKNOWN;
+    return reg->eventInfo->RegisterEvent(name);
 }
 
-// FireEvent — sends an event from C++ to all connected JavaScript sinks.
+// FireEvent - sends an event from C++ to all connected JavaScript sinks.
 //
 // How COM events work:
 //   1. IE subscribes to events via IConnectionPoint::Advise(), giving us an IDispatch* "sink"
@@ -2033,12 +2214,9 @@ inline void FireEvent(hControl c, DISPID eventId, VARIANT* args, int argc) {
 }
 
 inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args, int argc) {
-    if (!c || !c->reg) return;
-    EnterCriticalSection(&c->reg->cs);
-    auto it = c->reg->eventName2Id.find(name);
-    if (it == c->reg->eventName2Id.end()) { LeaveCriticalSection(&c->reg->cs); return; }
-    DISPID id = it->second;
-    LeaveCriticalSection(&c->reg->cs);
+    if (!c || !c->reg || !c->reg->eventInfo) return;
+    DISPID id = c->reg->eventInfo->GetEventId(name);
+    if (id == DISPID_UNKNOWN) return;
     FireEvent(c, id, args, argc);
 }
 
