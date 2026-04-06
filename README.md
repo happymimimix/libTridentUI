@@ -62,7 +62,7 @@
 
    We do NOT reinvent COM like some other libraries do.
    
-   <img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/0e9ec618-c8bc-4f51-8a56-f35c2f3d76c7" />
+   <img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/04f1f2b4-fe1b-46c4-a356-cc3e0bb30f38" />
 
 ## Supported features
 
