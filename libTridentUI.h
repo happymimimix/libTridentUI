@@ -1,6 +1,6 @@
 #pragma once
 /*
-libTridentUI - v0.4.3 Beta
+libTridentUI - v0.4.3
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by:
