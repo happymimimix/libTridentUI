@@ -56,6 +56,14 @@
    
    The ActiveX component registration is done completely in RAM, no registry writes, no uninstallation leftover!
 
+5. **Top-tier library code complexity and user code complexity balance**
+
+   **libTridentUI** only implements what's worth doing with absolute minimal bloat!
+
+   We do NOT reinvent COM like some other libraries do.
+   
+   <img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/04f1f2b4-fe1b-46c4-a356-cc3e0bb30f38" />
+
 ## Supported features
 
 ### Window hosting
@@ -79,8 +87,11 @@
 - [x] Call JS functions from C++ (ExecScript)
 - [x] Pass arguments: int, double, string, bool
 - [x] Return values from C++ to JS
-- [ ] Return values from JS to C++ (Work in progress)
+- [x] Return values from JS to C++
 - [x] Async callbacks from C++ to JS
+- [ ] Create & parse JS arrays (comming soon)
+- [ ] Create & parse JS objects (comming soon)
+- [ ] Create & parse JS anonymous functions (comming soon)
 
 ### DOM manipulation from C++
 - [x] Get element by ID
@@ -91,7 +102,7 @@
 - [x] Set CSS class
 - [x] Set inline style
 - [x] Convenience functions (SetElementHTML, SetElementText by ID)
-- [ ] Create/remove elements from C++ (Work in progress)
+- [x] Create/remove elements from C++
 - [ ] Query elements by class/tag/CSS selector
 - [ ] Event listener management from C++
 
@@ -143,32 +154,6 @@
 - [ ] Custom error page handling (IDocHostShowUI)
 - [ ] Download manager integration (IDownloadManager)
 - [ ] Custom security manager (IInternetSecurityManager)
-
-### HTML/CSS/JS engine capabilities (provided by mshtml.dll)
-- [x] HTML 4.01 rendering
-- [x] CSS 2.1 styling
-- [x] JavaScript (JScript 5.8 / IE8 baseline)
-- [x] DHTML / Dynamic HTML
-- [x] VBScript execution
-- [x] XMLHttpRequest (AJAX)
-- [x] CSS filters (IE proprietary: blur, shadow, gradient, etc.)
-- [x] VML (Vector Markup Language)
-- [x] Conditional comments (`<!--[if IE]>`)
-- [x] HTC components (HTML Components)
-- [x] DHTML Behaviors
-- [x] Clipboard operations (document.execCommand)
-- [x] Cookie read/write (document.cookie)
-- [x] Frames and iframes
-- [ ] WebSocket
-- [ ] Web Workers
-
-### Document modes (via X-UA-Compatible meta tag)
-- [x] IE5 Quirks Mode
-- [x] IE7 Standards Mode
-- [x] IE8 Standards Mode
-- [x] IE9 Standards Mode (Windows 7+)
-- [x] IE10 Standards Mode (Windows 8+)
-- [x] IE11 Edge Mode (Windows 8.1+)
 
 ### Architecture
 - [x] Single header library (header-only, no .lib/.dll needed)
