@@ -1,6 +1,6 @@
 #pragma once
 /*
-libTridentUI - v0.3.1 Beta
+libTridentUI - v0.4.1 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by:
@@ -138,16 +138,38 @@ inline void CloseTridentWindow(hTrident h);
 inline HWND GetTridentHWND(hTrident h);
 inline IWebBrowser2* GetTridentBrowser(hTrident h);
 inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb);
+inline void SetWndProc(hTrident h, TridentWndProc proc);
+inline void SetUserData(hTrident h, void* data);
+inline void* GetUserData(hTrident h);
 inline void NavigateTo(hTrident h, const wchar_t* url);
 inline void NavigateToRes(hTrident h, const wchar_t* resName);
 inline void NavigateToHTML(hTrident h, const wchar_t* html);
 inline hDocument GetDocument(hTrident h);
 inline hDocument2 GetDocument2(hDocument h);
-inline VARIANT EvalJS(hTrident h, const wchar_t* js);
-inline VARIANT CallJS(hTrident h, const wchar_t* jsfunc, VARIANT* args = NULL, int argc = 0);
-inline void RunJS(hTrident h, const wchar_t* js);
-inline hElement GetElement(hTrident h, const wchar_t* id);
 
+inline VARIANT EvaluateExpression(hTrident h, const wchar_t* expr);
+inline VARIANT InvokeGlobalFunction(hTrident h, const wchar_t* jsfunc, VARIANT* args = NULL, unsigned int argc = 0);
+inline VARIANT InvokeFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen, VARIANT* args = NULL, unsigned int argc = 0);
+inline void ExecuteScript(hTrident h, const wchar_t* jscript);
+inline HRESULT GetIDsOfNamesEx(IDispatch* disp, BSTR name, DISPID* dispid, bool create = false);
+inline VARIANT DispatchGetNamedProperty(IDispatch* disp, const wchar_t* name);
+inline void DispatchSetNamedProperty(IDispatch* disp, const wchar_t* name, const VARIANT* value);
+inline VARIANT CreateObject(hTrident h, const wchar_t* classname, VARIANT* args = NULL, unsigned int argc = 0);
+inline VARIANT CreateEmptyArray(hTrident h);
+inline VARIANT CreateEmptyObject(hTrident h);
+inline VARIANT GetDispatchIndex(VARIANT* arr, unsigned int index);
+inline void SetDispatchIndex(VARIANT* arr, unsigned int index, const VARIANT* value);
+inline VARIANT GetDispatchSize(VARIANT* arr);
+inline void DispatchResize(VARIANT* arr, unsigned int newsize);
+inline VARIANT GetDispatchProperty(VARIANT* obj, const wchar_t* prop);
+inline void SetDispatchProperty(VARIANT* obj, const wchar_t* prop, const VARIANT* value);
+inline VARIANT CallDispatchFunction(VARIANT* func, VARIANT* args = NULL, unsigned int argc = 0);
+inline VARIANT GetGlobalFunction(hTrident h, const wchar_t* funcName);
+inline VARIANT GetExternalFunction(hTrident h, const wchar_t* funcName);
+inline VARIANT GetFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen);
+inline VARIANT CreateFunction(hTrident h, wchar_t** args, unsigned int argc, const wchar_t* impl);
+
+inline hElement GetElement(hTrident h, const wchar_t* id);
 inline void SetHTML(hElement e, const wchar_t* html);
 inline std::wstring GetHTML(hElement e);
 inline void SetText(hElement e, const wchar_t* text);
@@ -164,27 +186,25 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id);
 inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, const wchar_t* html);
 inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html);
 inline void RemoveElement(hTrident h, const wchar_t* id);
-inline void SetWndProc(hTrident h, TridentWndProc proc);
-inline void SetUserData(hTrident h, void* data);
-inline void* GetUserData(hTrident h);
 
-inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = NULL, DWORD style = NULL);
-inline void UnregisterControl(hControlClass reg);
-inline CLSID GetControlCLSID(hControlClass reg);
+inline CLSID CLSIDFromName(const wchar_t* name);
 inline std::wstring CLSIDToString(const CLSID& clsid);
 inline std::wstring GetControlClassId(hControlClass reg);
-inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
-inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
-inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, int paramCount = 0);
-inline int GetEventExpectedArgc(hControlClass reg, DISPID eventId);
-inline int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name);
-inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL);
-inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL);
+inline CLSID GetControlCLSID(hControlClass reg);
+inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = NULL, DWORD style = NULL);
+inline void UnregisterControl(hControlClass reg);
 inline HWND GetControlHWND(hControl c);
 inline void* GetControlUserData(hControl c);
 inline void SetControlUserData(hControl c, void* data);
 inline void InvalidateControl(hControl c);
 inline hControlClass GetControlClass(hControl c);
+inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
+inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, unsigned int paramCount = 0);
+inline unsigned int GetEventExpectedArgc(hControlClass reg, DISPID eventId);
+inline unsigned int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name);
+inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL);
+inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL);
 inline hTrident FindHostFromControl(hControl c);
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
 inline void DisableDragDrop(hControl c);
@@ -1045,46 +1065,11 @@ inline hDocument2 GetDocument2(hDocument d) {
 	return d2;
 }
 
-// Call JavaScript functions
-// 
-// Method 1: Use CallJS()
-//  	If the function you want to call is a global function and you want the return value, use this.
-//  	Always remember to fill the parameters in REVERSE order!
-//  	Cannot call functions inside a namespace.
-// 
-// Method 2: Use EvalJS()
-//  	This has the exact same effect as running eval() in Java Script, so functions inside namespaces are accessible and a return value can be obtained normally.
-//  	Since your function call is wrapped inside eval(), this might be slightly slower than CallJS, so use CallJS instead whenever possible.
-// 
-// Methos 3: Use RunJS()
-//  	If you do NOT need the return value, use this method.
-//  	It's the simplest out of all three.
-
-inline VARIANT CallJS(hTrident h, const wchar_t* jsfunc, VARIANT* args, int argc) {
+// Methods to call JavaScript functions
+inline VARIANT EvaluateExpression(hTrident h, const wchar_t* expr) {
 	VARIANT result;
 	VariantInit(&result);
-	if (!jsfunc) return result;
-	hDocument doc = GetDocument(h);
-	if (!doc) return result;
-	IDispatch* scriptDisp = NULL;
-	doc->get_Script(&scriptDisp);
-	doc->Release();
-	if (!scriptDisp) return result;
-	DISPID funcid;
-	LPOLESTR funcname = SysAllocString(jsfunc);
-	if (SUCCEEDED(scriptDisp->GetIDsOfNames(IID_NULL, &funcname, 1, LOCALE_USER_DEFAULT, &funcid))) {
-		DISPPARAMS dp = { args, NULL, argc, 0 };
-		scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL);
-	}
-	SysFreeString(funcname);
-	scriptDisp->Release();
-	return result;
-}
-
-inline VARIANT EvalJS(hTrident h, const wchar_t* js) {
-	VARIANT result;
-	VariantInit(&result);
-	if (!js) return result;
+	if (!expr) return result;
 	hDocument doc = GetDocument(h);
 	if (!doc) return result;
 	IDispatch* scriptDisp = NULL;
@@ -1093,13 +1078,18 @@ inline VARIANT EvalJS(hTrident h, const wchar_t* js) {
 	if (!scriptDisp) return result;
 	DISPID evalId;
 	LPOLESTR evalName = SysAllocString(L"eval");
-	HRESULT hr = scriptDisp->GetIDsOfNames(IID_NULL, &evalName, 1, LOCALE_USER_DEFAULT, &evalId);
-	if (SUCCEEDED(hr)) {
+	if (SUCCEEDED(scriptDisp->GetIDsOfNames(IID_NULL, &evalName, 1, LOCALE_USER_DEFAULT, &evalId))) {
 		VARIANT arg;
 		arg.vt = VT_BSTR;
-		arg.bstrVal = SysAllocString(js);
+		arg.bstrVal = SysAllocString(expr);
 		DISPPARAMS dp = { &arg, NULL, 1, 0 };
-		hr = scriptDisp->Invoke(evalId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL);
+		if (FAILED(scriptDisp->Invoke(evalId, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL))) {
+			SysFreeString(arg.bstrVal);
+			SysFreeString(evalName);
+			scriptDisp->Release();
+			VariantClear(&result);
+			return result;
+		}
 		SysFreeString(arg.bstrVal);
 	}
 	SysFreeString(evalName);
@@ -1107,20 +1097,308 @@ inline VARIANT EvalJS(hTrident h, const wchar_t* js) {
 	return result;
 }
 
-inline void RunJS(hTrident h, const wchar_t* js) {
-	if (!js) return;
+inline VARIANT InvokeGlobalFunction(hTrident h, const wchar_t* jsfunc, VARIANT* args, unsigned int argc) {
+	VARIANT result;
+	VariantInit(&result);
+	if (argc && !args) return result;
+	wchar_t** path = new wchar_t*[1];
+	path[0] = const_cast<wchar_t*>(jsfunc);
+	VARIANT ret = InvokeFunctionByPath(h, path, 1, args, argc);
+	delete[] path;
+	return ret;
+}
+
+// Invoke a function at an arbitrary namespace depth.
+// Path is an array of property names to traverse from window.
+// 
+// Examples:
+//  	{ L"alert" }					-> window.alert
+//  	{ L"console", L"log" }			-> window.console.log
+//  	{ L"external", L"MyMethod" }	-> window.external.MyMethod
+//  	{ L"myNS", L"util", L"calc" }	-> window.myNS.util.calc
+inline VARIANT InvokeFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen, VARIANT* args, unsigned int argc) {
+	VARIANT result;
+	VariantInit(&result);
+	if (argc && !args) return result;
+	if (!path || !pathlen) return result;
+	hDocument doc = GetDocument(h);
+	if (!doc) return result;
+	IDispatch* scriptDisp = NULL;
+	doc->get_Script(&scriptDisp);
+	doc->Release();
+	if (!scriptDisp) return result;
+	for (unsigned int i = 0; i < pathlen; i++) {
+		const wchar_t* segment = path[i];
+		if (!segment) {
+			scriptDisp->Release();
+			return result;
+		}
+		DISPID funcid;
+		LPOLESTR funcname = SysAllocString(segment);
+		if (FAILED(scriptDisp->GetIDsOfNames(IID_NULL, &funcname, 1, LOCALE_USER_DEFAULT, &funcid))) {
+			SysFreeString(funcname);
+			scriptDisp->Release();
+			return result;
+		}
+		SysFreeString(funcname);
+		if (i < pathlen-1){
+			DISPPARAMS dp = { NULL, NULL, 0, 0 };
+			if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &dp, &result, NULL, NULL)) || result.vt != VT_DISPATCH || !result.pdispVal) {
+				scriptDisp->Release();
+				VariantClear(&result);
+				return result;
+			}
+			scriptDisp->Release();
+			scriptDisp = result.pdispVal;
+		}else{
+			DISPPARAMS dp = { args, NULL, argc, 0 };
+			if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL))){
+				scriptDisp->Release();
+				VariantClear(&result);
+				return result;
+			}
+			scriptDisp->Release();
+			return result;
+		}
+	}
+	return result;
+}
+
+inline void ExecuteScript(hTrident h, const wchar_t* jscript) {
+	if (!jscript) return;
 	hDocument d = GetDocument(h);
 	if (!d) return;
 	IHTMLWindow2* w = NULL;
 	HRESULT hr = d->get_parentWindow(&w);
 	if (FAILED(hr)) {d->Release();return;}
-	BSTR code = SysAllocString(js);
+	BSTR code = SysAllocString(jscript);
 	BSTR lang = SysAllocString(L"JavaScript");
 	hr = w->execScript(code, lang, nullptr);
 	SysFreeString(code);
 	SysFreeString(lang);
 	w->Release();
 	d->Release();
+}
+
+inline HRESULT GetIDsOfNamesEx(IDispatch* disp, BSTR name, DISPID* dispid, bool create) {
+	if (!disp || !dispid || !name) return E_POINTER;
+	IDispatchEx* dispEx = NULL;
+	HRESULT hr = disp->QueryInterface(IID_IDispatchEx, (void**)&dispEx);
+	if (FAILED(hr)) return hr;
+	hr = dispEx->GetDispID(name, create ? fdexNameEnsure : NULL, dispid);
+	dispEx->Release();
+	return hr;
+}
+
+inline VARIANT DispatchGetNamedProperty(IDispatch* disp, const wchar_t* name) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!disp || !name) return result;
+	BSTR bstrName = SysAllocString(name);
+	if (!bstrName) return result;
+	DISPID dispid;
+	HRESULT hr = GetIDsOfNamesEx(disp, bstrName, &dispid);
+	SysFreeString(bstrName);
+	if (FAILED(hr)) return result;
+	DISPPARAMS dp = { NULL, NULL, 0, 0 };
+	if (FAILED(disp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &dp, &result, NULL, NULL))) VariantClear(&result);
+	return result;
+}
+
+inline void DispatchSetNamedProperty(IDispatch* disp, const wchar_t* name, const VARIANT* value) {
+	if (!disp || !name || !value) return;
+	BSTR bstrName = SysAllocString(name);
+	if (!bstrName) return;
+	DISPID dispid;
+	HRESULT hr = GetIDsOfNamesEx(disp, bstrName, &dispid, true);
+	SysFreeString(bstrName);
+	if (FAILED(hr)) return;
+	DISPID named = DISPID_PROPERTYPUT;
+	DISPPARAMS dp = { const_cast<VARIANT*>(value), &named, 1, 1 };
+	disp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYPUT, &dp, NULL, NULL, NULL);
+}
+
+// Create new JavaScript objects
+inline VARIANT CreateObject(hTrident h, const wchar_t* classname, VARIANT* args, unsigned int argc) {
+	VARIANT result;
+	VariantInit(&result);
+	if (argc && !args) return result;
+	if (!classname) return result;
+	hDocument doc = GetDocument(h);
+	if (!doc) return result;
+	IDispatch* scriptDisp = NULL;
+	doc->get_Script(&scriptDisp);
+	doc->Release();
+	if (!scriptDisp) return result;
+	DISPID dispid;
+	LPOLESTR name = SysAllocString(classname);
+	if (SUCCEEDED(scriptDisp->GetIDsOfNames(IID_NULL, &name, 1, LOCALE_USER_DEFAULT, &dispid))) {
+		DISPPARAMS dp = { args, NULL, argc, 0 };
+		if (FAILED(scriptDisp->Invoke(dispid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_CONSTRUCT, &dp, &result, NULL, NULL))) {
+			SysFreeString(name);
+			scriptDisp->Release();
+			VariantClear(&result);
+			return result;
+		}
+	}
+	SysFreeString(name);
+	scriptDisp->Release();
+	return result;
+}
+
+inline VARIANT CreateEmptyArray(hTrident h) {
+	return CreateObject(h, L"Array");
+}
+
+inline VARIANT CreateEmptyObject(hTrident h) {
+	return CreateObject(h, L"Object");
+}
+
+inline VARIANT GetDispatchIndex(VARIANT* arr, unsigned int index) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!arr || arr->vt != VT_DISPATCH || !arr->pdispVal) return result;
+	std::wstring indexStr = std::to_wstring(index);
+	return DispatchGetNamedProperty(arr->pdispVal, indexStr.c_str());
+}
+
+inline void SetDispatchIndex(VARIANT* arr, unsigned int index, const VARIANT* value) {
+	if (!arr || arr->vt != VT_DISPATCH || !arr->pdispVal || !value) return;
+	std::wstring indexStr = std::to_wstring(index);
+	DispatchSetNamedProperty(arr->pdispVal, indexStr.c_str(), value);
+}
+
+inline VARIANT GetDispatchSize(VARIANT* arr) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!arr || arr->vt != VT_DISPATCH || !arr->pdispVal) return result;
+	return DispatchGetNamedProperty(arr->pdispVal, L"length");
+}
+
+inline void DispatchResize(VARIANT* arr, unsigned int newSize) {
+	if (!arr || arr->vt != VT_DISPATCH || !arr->pdispVal) return;
+	VARIANT sizeVar;
+	sizeVar.vt = VT_UI4;
+	sizeVar.ulVal = newSize;
+	DispatchSetNamedProperty(arr->pdispVal, L"length", &sizeVar);
+}
+
+inline VARIANT GetDispatchProperty(VARIANT* obj, const wchar_t* prop) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!obj || obj->vt != VT_DISPATCH || !obj->pdispVal || !prop) return result;
+	return DispatchGetNamedProperty(obj->pdispVal, prop);
+}
+
+inline void SetDispatchProperty(VARIANT* obj, const wchar_t* prop, const VARIANT* value) {
+	if (!obj || obj->vt != VT_DISPATCH || !obj->pdispVal || !prop || !value) return;
+	DispatchSetNamedProperty(obj->pdispVal, prop, value);
+}
+
+inline VARIANT CallDispatchFunction(VARIANT* func, VARIANT* args, unsigned int argc) {
+	VARIANT result;
+	VariantInit(&result);
+	if (argc && !args) return result;
+	if (!func || func->vt != VT_DISPATCH || !func->pdispVal) return result;
+	DISPPARAMS dp = { args, NULL, argc, 0 };
+	func->pdispVal->Invoke(DISPID_VALUE, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL);
+	return result;
+}
+
+inline VARIANT GetGlobalFunction(hTrident h, const wchar_t* jsfunc) {
+	wchar_t** path = new wchar_t*[1];
+	path[0] = const_cast<wchar_t*>(jsfunc);
+	VARIANT ret = GetFunctionByPath(h, path, 1);
+	delete[] path;
+	return ret;
+}
+
+inline VARIANT GetExternalFunction(hTrident h, const wchar_t* funcName) {
+	wchar_t** path = new wchar_t*[2];
+	path[0] = const_cast<wchar_t*>(L"external");
+	path[1] = const_cast<wchar_t*>(funcName);
+	VARIANT ret = GetFunctionByPath(h, path, 2);
+	delete[] path;
+	return ret;
+}
+
+// Obtain a pointer to a function at an arbitrary namespace depth.
+// Path is an array of property names to traverse from window.
+// 
+// Example: window.console.log()
+//  	wchar_t** path = new wchar_t*[2];
+//  	path[0] = const_cast<wchar_t*>(L"console");
+//  	path[1] = const_cast<wchar_t*>(L"log");
+//  	GetFunctionByPath(MyTridentWindow, path, 2);
+//  	delete[] path;
+inline VARIANT GetFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen) {
+	VARIANT result;
+	VariantInit(&result);
+	if (!path || !pathlen) return result;
+	hDocument doc = GetDocument(h);
+	if (!doc) return result;
+	IDispatch* scriptDisp = NULL;
+	doc->get_Script(&scriptDisp);
+	doc->Release();
+	if (!scriptDisp) return result;
+	for (unsigned int i = 0; i < pathlen; i++) {
+		const wchar_t* segment = path[i];
+		if (!segment) {
+			scriptDisp->Release();
+			return result;
+		}
+		DISPID funcid;
+		LPOLESTR funcname = SysAllocString(segment);
+		if (FAILED(scriptDisp->GetIDsOfNames(IID_NULL, &funcname, 1, LOCALE_USER_DEFAULT, &funcid))) {
+			SysFreeString(funcname);
+			scriptDisp->Release();
+			return result;
+		}
+		SysFreeString(funcname);
+		DISPPARAMS dp = { NULL, NULL, 0, 0 };
+		if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &dp, &result, NULL, NULL)) || result.vt != VT_DISPATCH || !result.pdispVal) {
+			scriptDisp->Release();
+			VariantClear(&result);
+			return result;
+		}
+		scriptDisp->Release();
+		scriptDisp = result.pdispVal;
+	}
+	return result;
+}
+
+// Obtain a pointer to an anonymous function.
+// Parameters are defined as wide strings in reverse order.
+// 
+// Example:
+//  	wchar_t** params = new wchar_t*[3];
+//  	params[2] = const_cast<wchar_t*>(L"a");
+//  	params[1] = const_cast<wchar_t*>(L"b");
+//  	params[0] = const_cast<wchar_t*>(L"c");
+//  	CreateFunction(MyTridentWindow, params, 3, L"return a + b + c");
+//  	delete[] params;
+//  	
+// This is equivalent to:
+//  	(a, b, c) => {return a + b + c}
+inline VARIANT CreateFunction(hTrident h, wchar_t** args, unsigned int argc, const wchar_t* impl) {
+	VARIANT result;
+	VariantInit(&result);
+	if (argc && !args) return result;
+	if (!impl) return result;
+	argc++; // Increase by one because we need to include the function body.
+	VARIANT* newparams = new VARIANT[argc];
+	// Function body (last parameter)
+	newparams[0].vt = VT_BSTR;
+	newparams[0].bstrVal = SysAllocString(impl);
+	// Fill the parameters...
+	for (unsigned int i = 1; i < argc; i++) {
+		newparams[i].vt = VT_BSTR;
+		newparams[i].bstrVal = SysAllocString(args[i - 1]);
+	}
+	result = CreateObject(h, L"Function", newparams, argc);
+	for (unsigned int i = 0; i < argc; i++) VariantClear(&newparams[i]);
+	delete[] newparams;
+	return result;
 }
 
 inline hElement GetElement(hTrident h, const wchar_t* id) {
@@ -1383,7 +1661,7 @@ class EventTypeInfo : public ITypeInfo {
 	std::map<std::wstring, DISPID> m_name2id = {};
 	std::map<DISPID, std::wstring> m_id2name = {}; // Reverse lookup for GetNames
 	std::vector<DISPID> m_orderedIds = {}; // Ordered list for GetFuncDesc by index
-	std::map<DISPID, WORD> m_id2cParams = {}; // Parameter count per event (for GetFuncDesc)
+	std::map<DISPID, unsigned int> m_id2cParams = {}; // Parameter count per event (for GetFuncDesc)
 public:
 	EventTypeInfo(const CLSID& clsid) : m_clsid(clsid) {
 		InterlockedIncrement(&m_ref);
@@ -1392,7 +1670,7 @@ public:
 	~EventTypeInfo() { DeleteCriticalSection(&m_cs); }
 
 	// Register a new event name with its parameter count. Returns DISPID. Idempotent for same name.
-	DISPID RegisterEvent(const wchar_t* name, int paramCount = 0) {
+	DISPID RegisterEvent(const wchar_t* name, unsigned int paramCount = 0) {
 		EnterCriticalSection(&m_cs);
 		auto it = m_name2id.find(name);
 		if (it != m_name2id.end()) { DISPID d = it->second; LeaveCriticalSection(&m_cs); return d; }
@@ -1401,7 +1679,7 @@ public:
 		m_name2id[name] = id;
 		m_id2name[id] = name;
 		m_orderedIds.push_back(id);
-		m_id2cParams[id] = (WORD)(paramCount > 0 ? paramCount : 0);
+		m_id2cParams[id] = paramCount;
 		LeaveCriticalSection(&m_cs);
 		return id;
 	}
@@ -1416,10 +1694,10 @@ public:
 	}
 
 	// Get the registered parameter count for an event. Returns 0 if not found.
-	int GetParamCount(DISPID id) {
+	unsigned int GetParamCount(DISPID id) {
 		EnterCriticalSection(&m_cs);
 		auto it = m_id2cParams.find(id);
-		int n = (it != m_id2cParams.end()) ? it->second : 0;
+		unsigned int n = (it != m_id2cParams.end()) ? it->second : 0;
 		LeaveCriticalSection(&m_cs);
 		return n;
 	}
@@ -1459,7 +1737,7 @@ public:
 		EnterCriticalSection(&m_cs);
 		if (index >= m_orderedIds.size()) { LeaveCriticalSection(&m_cs); return TYPE_E_ELEMENTNOTFOUND; }
 		DISPID id = m_orderedIds[index];
-		WORD cParams = m_id2cParams.count(id) ? m_id2cParams[id] : 0;
+		unsigned int cParams = m_id2cParams.count(id) ? m_id2cParams[id] : 0;
 		LeaveCriticalSection(&m_cs);
 		FUNCDESC* fd = (FUNCDESC*)CoTaskMemAlloc(sizeof(FUNCDESC));
 		if (!fd) return E_OUTOFMEMORY;
@@ -1474,7 +1752,7 @@ public:
 			fd->lprgelemdescParam = (ELEMDESC*)CoTaskMemAlloc(cParams * sizeof(ELEMDESC));
 			if (!fd->lprgelemdescParam) { CoTaskMemFree(fd); return E_OUTOFMEMORY; }
 			memset(fd->lprgelemdescParam, 0, cParams * sizeof(ELEMDESC));
-			for (WORD i = 0; i < cParams; i++)
+			for (unsigned int i = 0; i < cParams; i++)
 				fd->lprgelemdescParam[i].tdesc.vt = VT_VARIANT; // Accept any type
 		}
 		*ppDesc = fd;
@@ -2335,17 +2613,17 @@ inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGe
 	LeaveCriticalSection(&reg->cs);
 }
 
-inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, int paramCount) {
+inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, unsigned int paramCount) {
 	if (!reg || !reg->eventInfo) return DISPID_UNKNOWN;
 	return reg->eventInfo->RegisterEvent(name, paramCount);
 }
 
-inline int GetEventExpectedArgc(hControlClass reg, DISPID eventId) {
+inline unsigned int GetEventExpectedArgc(hControlClass reg, DISPID eventId) {
 	if (!reg || !reg->eventInfo) return 0;
 	return reg->eventInfo->GetParamCount(eventId);
 }
 
-inline int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name) {
+inline unsigned int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name) {
 	if (!reg || !reg->eventInfo || !name) return 0;
 	DISPID id = reg->eventInfo->GetEventId(name);
 	if (id == DISPID_UNKNOWN) return 0;
@@ -2368,7 +2646,7 @@ inline int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name) {
 // (which would modify the map while we're iterating it).
 inline void FireEvent(hControl c, DISPID eventId, VARIANT* args) {
 	if (!c || !c->reg || !c->reg->eventInfo) return;
-	int argc = c->reg->eventInfo->GetParamCount(eventId);
+	unsigned int argc = c->reg->eventInfo->GetParamCount(eventId);
 	if (argc > 0 && !args) return;
 	DISPPARAMS dp = {};
 	dp.rgvarg = args;
