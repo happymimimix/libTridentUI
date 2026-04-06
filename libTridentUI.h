@@ -1,6 +1,6 @@
 #pragma once
 /*
-libTridentUI - v0.4.1 Beta
+libTridentUI - v0.4.3 Beta
 An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
 Works perfectly on Microsoft Windows XP SP3!
 Made possible by:
@@ -90,7 +90,7 @@ struct ControlInstance_;
 typedef ControlInstance_* hControl;
 struct ControlReg_;
 typedef ControlReg_* hControlClass;
-enum InsertLocation {BEFORE_BEGIN,AFTER_BEGIN,BEFORE_END,AFTER_END};
+enum InsertLocation { BEFORE_BEGIN, AFTER_BEGIN, BEFORE_END, AFTER_END };
 
 // Callback signatures - both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
 // 
@@ -1060,6 +1060,7 @@ inline hDocument GetDocument(hTrident h) {
 }
 
 inline hDocument2 GetDocument2(hDocument d) {
+	if (!d) return NULL;
 	IHTMLDocument3* d2 = NULL;
 	if (FAILED(d->QueryInterface(IID_IHTMLDocument3, (void**)&d2))) return NULL;
 	return d2;
@@ -1101,7 +1102,7 @@ inline VARIANT InvokeGlobalFunction(hTrident h, const wchar_t* jsfunc, VARIANT* 
 	VARIANT result;
 	VariantInit(&result);
 	if (argc && !args) return result;
-	wchar_t** path = new wchar_t*[1];
+	wchar_t** path = new wchar_t* [1];
 	path[0] = const_cast<wchar_t*>(jsfunc);
 	VARIANT ret = InvokeFunctionByPath(h, path, 1, args, argc);
 	delete[] path;
@@ -1141,18 +1142,22 @@ inline VARIANT InvokeFunctionByPath(hTrident h, wchar_t** path, unsigned int pat
 			return result;
 		}
 		SysFreeString(funcname);
-		if (i < pathlen-1){
+		if (i < pathlen - 1) {
 			DISPPARAMS dp = { NULL, NULL, 0, 0 };
 			if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_PROPERTYGET, &dp, &result, NULL, NULL)) || result.vt != VT_DISPATCH || !result.pdispVal) {
 				scriptDisp->Release();
 				VariantClear(&result);
 				return result;
 			}
+			IDispatch* nextDisp = result.pdispVal;
+			nextDisp->AddRef();
 			scriptDisp->Release();
-			scriptDisp = result.pdispVal;
-		}else{
+			scriptDisp = nextDisp;
+			VariantClear(&result);
+		}
+		else {
 			DISPPARAMS dp = { args, NULL, argc, 0 };
-			if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL))){
+			if (FAILED(scriptDisp->Invoke(funcid, IID_NULL, LOCALE_USER_DEFAULT, DISPATCH_METHOD, &dp, &result, NULL, NULL))) {
 				scriptDisp->Release();
 				VariantClear(&result);
 				return result;
@@ -1161,7 +1166,6 @@ inline VARIANT InvokeFunctionByPath(hTrident h, wchar_t** path, unsigned int pat
 			return result;
 		}
 	}
-	return result;
 }
 
 inline void ExecuteScript(hTrident h, const wchar_t* jscript) {
@@ -1170,7 +1174,7 @@ inline void ExecuteScript(hTrident h, const wchar_t* jscript) {
 	if (!d) return;
 	IHTMLWindow2* w = NULL;
 	HRESULT hr = d->get_parentWindow(&w);
-	if (FAILED(hr)) {d->Release();return;}
+	if (FAILED(hr)) { d->Release(); return; }
 	BSTR code = SysAllocString(jscript);
 	BSTR lang = SysAllocString(L"JavaScript");
 	hr = w->execScript(code, lang, nullptr);
@@ -1306,7 +1310,7 @@ inline VARIANT CallDispatchFunction(VARIANT* func, VARIANT* args, unsigned int a
 }
 
 inline VARIANT GetGlobalFunction(hTrident h, const wchar_t* jsfunc) {
-	wchar_t** path = new wchar_t*[1];
+	wchar_t** path = new wchar_t* [1];
 	path[0] = const_cast<wchar_t*>(jsfunc);
 	VARIANT ret = GetFunctionByPath(h, path, 1);
 	delete[] path;
@@ -1314,7 +1318,7 @@ inline VARIANT GetGlobalFunction(hTrident h, const wchar_t* jsfunc) {
 }
 
 inline VARIANT GetExternalFunction(hTrident h, const wchar_t* funcName) {
-	wchar_t** path = new wchar_t*[2];
+	wchar_t** path = new wchar_t* [2];
 	path[0] = const_cast<wchar_t*>(L"external");
 	path[1] = const_cast<wchar_t*>(funcName);
 	VARIANT ret = GetFunctionByPath(h, path, 2);
@@ -1361,10 +1365,19 @@ inline VARIANT GetFunctionByPath(hTrident h, wchar_t** path, unsigned int pathle
 			VariantClear(&result);
 			return result;
 		}
-		scriptDisp->Release();
-		scriptDisp = result.pdispVal;
+		if (i < pathlen - 1)
+		{
+			IDispatch* nextDisp = result.pdispVal;
+			nextDisp->AddRef();
+			scriptDisp->Release();
+			scriptDisp = nextDisp;
+			VariantClear(&result);
+		}
+		else {
+			scriptDisp->Release();
+			return result;
+		}
 	}
-	return result;
 }
 
 // Obtain a pointer to an anonymous function.
@@ -1407,7 +1420,7 @@ inline hElement GetElement(hTrident h, const wchar_t* id) {
 	hDocument2 d2 = GetDocument2(d);
 	if (!d2) { d->Release(); return NULL; }
 	BSTR bstrId = SysAllocString(id);
-	IHTMLElement* e = NULL;
+	hElement e = NULL;
 	d2->getElementById(bstrId, &e);
 	SysFreeString(bstrId);
 	d2->Release();
@@ -1491,8 +1504,7 @@ inline std::wstring GetAttr(hElement e, const wchar_t* name) {
 	e->getAttribute(bstrName, 0, &v);
 	SysFreeString(bstrName);
 	std::wstring result;
-	if (v.vt == VT_BSTR && v.bstrVal)
-		result = v.bstrVal;
+	if (v.vt == VT_BSTR && v.bstrVal) result = v.bstrVal;
 	VariantClear(&v);
 	return result;
 }
@@ -1500,26 +1512,26 @@ inline std::wstring GetAttr(hElement e, const wchar_t* name) {
 inline void SetElementHTML(hTrident h, const wchar_t* id, const wchar_t* html) {
 	hElement e = GetElement(h, id);
 	SetHTML(e, html);
-	e->Release();
+	if (e) e->Release();
 }
 
 inline std::wstring GetElementHTML(hTrident h, const wchar_t* id) {
 	hElement e = GetElement(h, id);
 	std::wstring result = GetHTML(e);
-	e->Release();
+	if (e) e->Release();
 	return result;
 }
 
 inline void SetElementText(hTrident h, const wchar_t* id, const wchar_t* text) {
 	hElement e = GetElement(h, id);
 	SetText(e, text);
-	e->Release();
+	if (e) e->Release();
 }
 
 inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 	hElement e = GetElement(h, id);
 	std::wstring result = GetText(e);
-	e->Release();
+	if (e) e->Release();
 	return result;
 }
 
@@ -1532,7 +1544,7 @@ inline std::wstring GetElementText(hTrident h, const wchar_t* id) {
 inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, const wchar_t* html) {
 	hElement e = GetElement(h, id);
 	if (!e) return;
-	static const wchar_t* positions[] = {L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd"};
+	static const wchar_t* positions[] = { L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd" };
 	BSTR bstrWhere = SysAllocString(positions[where]);
 	BSTR bstrHTML = SysAllocString(html);
 	e->insertAdjacentHTML(bstrWhere, bstrHTML);
@@ -1544,11 +1556,11 @@ inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, cons
 inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html) {
 	hDocument doc = GetDocument(h);
 	if (!doc) return;
-	IHTMLElement* body = NULL;
+	hElement body = NULL;
 	doc->get_body(&body);
 	doc->Release();
 	if (!body) return;
-	static const wchar_t* positions[] = {L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd"};
+	static const wchar_t* positions[] = { L"beforeBegin", L"afterBegin", L"beforeEnd", L"afterEnd" };
 	BSTR bstrWhere = SysAllocString(positions[where]);
 	BSTR bstrHTML = SysAllocString(html);
 	body->insertAdjacentHTML(bstrWhere, bstrHTML);
