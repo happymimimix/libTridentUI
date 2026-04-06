@@ -58,7 +58,7 @@
 
 5. **Top-tier library code complexity and user code complexity balance**
 
-   **libTridentUI** only implements what's worth doing with minimal bloat!
+   **libTridentUI** only implements what's worth doing with absolute minimal bloat!
 
    We do NOT reinvent COM like some other libraries do.
    
