@@ -214,6 +214,46 @@ inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
 inline TridentWindowData_* g_trident_head = NULL;
 
+// MethodDispatch - Provides JS a callable function pointer, used in GetExternalFunction().
+class MethodDispatch : public IDispatch {
+	ULONG m_ref = 0;
+	MethodCallback m_fn;
+public:
+	MethodDispatch(MethodCallback cb) : m_fn(cb) { InterlockedIncrement(&m_ref); }
+	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+		if (riid == IID_IUnknown || riid == IID_IDispatch) {
+			*ppv = static_cast<IDispatch*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*ppv = NULL;
+		return E_NOINTERFACE;
+	}
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
+	STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
+	STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
+		for (UINT i = 0; i < cnt; i++) {
+			if (!names[i] || !names[i][0]) {
+				ids[i] = DISPID_VALUE;
+			}
+			else {
+				ids[i] = DISPID_UNKNOWN;
+				return DISP_E_UNKNOWNNAME;
+			}
+		}
+		return S_OK;
+	}
+	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
+		if (id == DISPID_VALUE && (wf & DISPATCH_METHOD)) {
+			if (res) VariantInit(res);
+			return m_fn(dp, res);
+		}
+		return DISP_E_MEMBERNOTFOUND;
+	}
+};
+
 // ExternalDispatch - this is what JavaScript sees as "window.external"
 // 
 // When JS calls window.external.Add(1, 2), here's what happens behind the scenes:
@@ -231,7 +271,7 @@ inline TridentWindowData_* g_trident_head = NULL;
 // NOTE: This object lives as a member of OleSite (not heap-allocated separately),
 // so its Release() intentionally does NOT delete this. Its lifetime is tied to OleSite.
 class ExternalDispatch : public IDispatch {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	CRITICAL_SECTION m_cs;
 	DISPID m_nextId = INT32_MAX;
 	std::map<std::wstring, DISPID> m_name2id = {};
@@ -296,14 +336,26 @@ public:
 	// the critical section BEFORE calling the user's code. This prevents deadlocks if
 	// the user's callback tries to bind more functions.
 	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
-		if (!(wf & DISPATCH_METHOD)) return DISP_E_MEMBERNOTFOUND;
 		EnterCriticalSection(&m_cs);
 		auto it = m_id2func.find(id);
 		if (it == m_id2func.end()) { LeaveCriticalSection(&m_cs); return DISP_E_MEMBERNOTFOUND; }
 		auto fn = it->second;
 		LeaveCriticalSection(&m_cs);
-		if (res) VariantInit(res);
-		return fn(dp, res);
+		if (wf & DISPATCH_METHOD) {
+			if (res) VariantInit(res);
+			return fn(dp, res);
+		}
+		if (wf & DISPATCH_PROPERTYGET) {
+			if (res) {
+				res->vt = VT_DISPATCH;
+				res->pdispVal = new MethodDispatch(fn);
+				return S_OK;
+			}
+			else {
+				return E_POINTER;
+			}
+		}
+		return DISP_E_MEMBERNOTFOUND;
 	}
 };
 
@@ -483,7 +535,7 @@ public:
 		return E_NOINTERFACE;
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
 	// ---- IOleClientSite ----
 	// These methods let IE ask us about its hosting environment.
@@ -686,7 +738,7 @@ private:
 			return E_NOINTERFACE;
 		}
 		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-		STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 		STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_hwnd; return S_OK; }
 		STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
 		STDMETHODIMP GetBorder(LPRECT) override { return S_OK; }
@@ -702,7 +754,7 @@ private:
 	};
 	class InlineEnum : public IEnumUnknown {
 		ULONG m_ref = 0;
-		LONG m_pos = 0;
+		ULONG m_pos = 0;
 		IUnknown* m_ptr = NULL;
 	public:
 		InlineEnum(IUnknown* p) : m_pos(0), m_ptr(p) {
@@ -721,7 +773,7 @@ private:
 			return E_NOINTERFACE;
 		}
 		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-		STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 		STDMETHODIMP Next(ULONG celt, IUnknown** p, ULONG* f) override {
 			if (!p) return E_POINTER;
 			ULONG fetched = 0;
@@ -737,7 +789,7 @@ private:
 		STDMETHODIMP Clone(IEnumUnknown**) override { return E_NOTIMPL; }
 	};
 	// ---- Private members ----
-	LONG m_ref = 0; // COM reference count
+	ULONG m_ref = 0; // COM reference count
 	HWND m_hwnd = NULL; // The host window we draw into
 	IUnknown* m_pUnkSite = NULL; // IObjectWithSite back-pointer
 	IViewObject* m_pView = NULL; // IE's drawing interface
@@ -1666,7 +1718,7 @@ struct DispEntry {
 //  	4. IE calls IConnectionPoint::Advise with a sink that maps that DISPID to the JS handler
 //  	5. C++ calls FireEvent(ctrl, dispid) -> iterates sinks -> IE routes to JS handler
 class EventTypeInfo : public ITypeInfo {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	CRITICAL_SECTION m_cs;
 	CLSID m_clsid = {};
 	DISPID m_nextId = INT32_MAX;
@@ -1720,7 +1772,7 @@ public:
 		*ppv = NULL; return E_NOINTERFACE;
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
 	// ---- ITypeInfo - the methods IE actually calls for attachEvent ----
 
@@ -1832,7 +1884,7 @@ public:
 // flagged as IMPLTYPEFLAG_FSOURCE | IMPLTYPEFLAG_FDEFAULT.
 // When IE calls GetRefTypeInfo(), we return the EventTypeInfo.
 class CoclassTypeInfo : public ITypeInfo {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	CLSID m_clsid = {};
 	EventTypeInfo* m_eventTI = NULL; // Strong reference (AddRef'd)
 public:
@@ -1847,7 +1899,7 @@ public:
 		*ppv = NULL; return E_NOINTERFACE;
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
 	// GetTypeAttr - we're a coclass with 1 impl type (the source event interface)
 	STDMETHODIMP GetTypeAttr(TYPEATTR** pp) override {
@@ -1908,7 +1960,7 @@ public:
 // Reference-counted because both the registry and active instances hold pointers to it.
 // UnregisterControl releases the registry's ref; instances release theirs in ~ActiveXControl.
 struct ControlReg_ {
-	LONG refCount = 0;
+	ULONG refCount = 0;
 	std::wstring name;
 	ControlWndProc wndProc = NULL;
 	void* defaultUserData = NULL;
@@ -1976,7 +2028,7 @@ class ActiveXControl :
 	public IDropTarget, public IDropSource, public IProvideClassInfo2
 {
 public:
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	ControlInstance_* m_inst = NULL;
 
 	ActiveXControl(ControlReg_* reg) {
@@ -2017,7 +2069,7 @@ public:
 		return E_NOINTERFACE;
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 
 	// IOleObject
 	STDMETHODIMP SetClientSite(IOleClientSite* p) override { if (m_inst->clientSite) m_inst->clientSite->Release(); m_inst->clientSite = p; if (p) p->AddRef(); return S_OK; }
@@ -2385,7 +2437,7 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // This object holds a strong reference (AddRef) to the parent ActiveXControl via m_pCPC,
 // ensuring the control stays alive as long as anyone holds this connection point.
 class CtrlConnectionPoint : public IConnectionPoint {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	ControlInstance_* m_inst = NULL;
 	IConnectionPointContainer* m_pCPC = NULL;
 public:
@@ -2402,14 +2454,8 @@ public:
 		*ppv = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override {
-		return InterlockedIncrement(&m_ref);
-	}
-	STDMETHODIMP_(ULONG) Release() override {
-		LONG r = InterlockedDecrement(&m_ref);
-		if (!r) delete this;
-		return r;
-	}
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 	STDMETHODIMP GetConnectionInterface(IID* p) override {
 		if (!p) return E_POINTER;
 		*p = IID_IDispatch;
@@ -2456,7 +2502,7 @@ inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnection
 // and calls CreateInstance() on it. We create a new ActiveXControl and return it.
 // This is a pure in-memory registration - no registry entries are written.
 class CtrlClassFactory : public IClassFactory {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	ControlReg_* m_reg = NULL;
 public:
 	CtrlClassFactory(ControlReg_* r) : m_reg(r) { InterlockedIncrement(&m_ref); }
@@ -2469,11 +2515,7 @@ public:
 		return E_NOINTERFACE;
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override {
-		LONG r = InterlockedDecrement(&m_ref);
-		if (!r) delete this;
-		return r;
-	}
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 	STDMETHODIMP CreateInstance(IUnknown* pOuter, REFIID riid, void** ppv) override {
 		if (pOuter) return CLASS_E_NOAGGREGATION;
 		ActiveXControl* c = new ActiveXControl(m_reg);
@@ -2491,7 +2533,7 @@ public:
 //  	DoDragDrop(pDO, pDropSource, DROPEFFECT_COPY, &effect);
 //  	pDO->Release();
 class SimpleDataObject : public IDataObject {
-	LONG m_ref = 0;
+	ULONG m_ref = 0;
 	std::wstring m_text;
 public:
 	SimpleDataObject(const wchar_t* text) : m_text(text ? text : L"") {
@@ -2505,14 +2547,8 @@ public:
 		*ppv = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override {
-		return InterlockedIncrement(&m_ref);
-	}
-	STDMETHODIMP_(ULONG) Release() override {
-		LONG r = InterlockedDecrement(&m_ref);
-		if (!r) delete this;
-		return r;
-	}
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
 	STDMETHODIMP GetData(FORMATETC* pFmt, STGMEDIUM* pMed) override {
 		if (!pFmt || !pMed) return E_POINTER;
 		if (pFmt->cfFormat != CF_UNICODETEXT || !(pFmt->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
