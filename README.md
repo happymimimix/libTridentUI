@@ -89,9 +89,9 @@
 - [x] Return values from C++ to JS
 - [x] Return values from JS to C++
 - [x] Async callbacks from C++ to JS
-- [ ] Create & parse JS arrays (comming soon)
-- [ ] Create & parse JS objects (comming soon)
-- [ ] Create & parse JS anonymous functions (comming soon)
+- [x] Create & parse JS arrays (comming soon)
+- [x] Create & parse JS objects (comming soon)
+- [x] Create & parse JS anonymous functions (comming soon)
 
 ### DOM manipulation from C++
 - [x] Get element by ID
