@@ -56,6 +56,12 @@
    
    The ActiveX component registration is done completely in RAM, no registry writes, no uninstallation leftover!
 
+5. **Top-tier library code complexity and user code complexity balance**
+
+   **libTridentUI** only implements what's worth doing with minimal bloat! This is NOT a library that's attempting to re-invent COM.
+   
+   <img width="800" height="600" alt="image" src="https://github.com/user-attachments/assets/0e9ec618-c8bc-4f51-8a56-f35c2f3d76c7" />
+
 ## Supported features
 
 ### Window hosting
