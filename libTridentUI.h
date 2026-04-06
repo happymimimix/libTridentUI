@@ -1613,7 +1613,7 @@ inline void RemoveElement(hTrident h, const wchar_t* id) {
 //  	IDropTarget/IDropSource		- OLE drag & drop
 //  	IProvideClassInfo2			- Tells IE which outbound event interface to use
 
-// CLSIDFromName - generates a deterministic GUID from a control name using FNV-1a hash.
+// CLSIDFromName - generates a deterministic GUID from a control name using MD5 hash.
 // Same name always produces the same CLSID, so you can hardcode it in HTML.
 inline CLSID CLSIDFromName(const wchar_t* name) {
 	CLSID result = {};
@@ -2486,7 +2486,7 @@ public:
 
 // SimpleDataObject - a minimal IDataObject that holds Unicode text.
 // Used for OLE drag & drop. Usage:
-//  	IDataObject* pDO = CreateTextDataObject(L"hello");
+//  	IDataObject* pDO = new SimpleDataObject(L"hello");
 //  	DWORD effect;
 //  	DoDragDrop(pDO, pDropSource, DROPEFFECT_COPY, &effect);
 //  	pDO->Release();
