@@ -1227,11 +1227,15 @@ inline void ExecuteScript(hTrident h, const wchar_t* jscript) {
 	IHTMLWindow2* w = NULL;
 	HRESULT hr = d->get_parentWindow(&w);
 	if (FAILED(hr)) { d->Release(); return; }
+	VARIANT trash;
+	VariantInit(&trash);
 	BSTR code = SysAllocString(jscript);
 	BSTR lang = SysAllocString(L"JavaScript");
-	hr = w->execScript(code, lang, nullptr);
+	// Stupid Microsoft! Not only they never give us any meaningful return values, they also doesn't allow nullptr otherwise the script won't execute at all!
+	hr = w->execScript(code, lang, &trash);
 	SysFreeString(code);
 	SysFreeString(lang);
+	VariantClear(&trash);
 	w->Release();
 	d->Release();
 }
