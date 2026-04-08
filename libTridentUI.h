@@ -24,7 +24,7 @@ The trick is that IE's engine is an "ActiveX control" - a type of COM object tha
 inside another window. To host it, we need to implement a bunch of COM interfaces that the control
 calls back into. Think of it like a plugin system: our app is the host, mshtml is the plugin.
 The plugin says "I need a window to draw in" and we respond with our HWND. It says "give me a
-frame for my toolbar" and we give it a dummy one. And so on, for about 20 different interfaces.
+frame for my toolbar" and we give it a dummy one. And so on, for 19 different interfaces (8 in OleSite, 11 in ActiveXControl).
 
 The key interfaces WE implement (as the "container" / "host"):
 	IOleClientSite		- "I'm the app hosting you, here's how to talk to me"
@@ -57,6 +57,7 @@ The ActiveX control creation works the other way around:
 #include <wincrypt.h>
 #include <ole2.h>
 #include <oleidl.h>
+#include <shlobj.h>
 #include <oaidl.h>
 #include <oleauto.h>
 #include <exdisp.h>
@@ -79,6 +80,7 @@ The ActiveX control creation works the other way around:
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shell32.lib")
 
 // Public APIs
 struct TridentWindowData_;
@@ -115,7 +117,7 @@ enum InsertLocation { BEFORE_BEGIN, AFTER_BEGIN, BEFORE_END, AFTER_END };
 //  	args[0].vt = VT_BSTR; args[0].bstrVal = SysAllocString(L"hello"); // last arg first
 //  	args[1].vt = VT_I4; args[1].lVal = 42; // first arg last
 //  	FireEvent(c, evtId, args);
-using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
+using MethodCallback = std::function<HRESULT(hTrident, DISPPARAMS*, VARIANT*)>;
 using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
 
 typedef LRESULT(*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
@@ -126,6 +128,10 @@ typedef HRESULT(*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grf
 typedef HRESULT(*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 typedef HRESULT(*DropLeaveCallback)(hControl c);
 typedef HRESULT(*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropEnterCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropOverCallback_host)(hTrident h, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropLeaveCallback_host)(hTrident h);
+typedef HRESULT(*DropCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 
 inline void TridentInit();
 inline void TridentShutdown();
@@ -138,6 +144,7 @@ inline void CloseTridentWindow(hTrident h);
 inline HWND GetTridentHWND(hTrident h);
 inline IWebBrowser2* GetTridentBrowser(hTrident h);
 inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb);
+inline void UnbindFunction(hTrident h, const wchar_t* name);
 inline void SetWndProc(hTrident h, TridentWndProc proc);
 inline void SetUserData(hTrident h, void* data);
 inline void* GetUserData(hTrident h);
@@ -187,6 +194,11 @@ inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, cons
 inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html);
 inline void RemoveElement(hTrident h, const wchar_t* id);
 
+using DataProvider = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+using DataHandler = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+static constexpr DWORD TYMED_MASK = 0x7FFFFFFF;
+static constexpr DWORD TYMED_HERE = 0x80000000;
+
 inline CLSID CLSIDFromName(const wchar_t* name);
 inline std::wstring CLSIDToString(const CLSID& clsid);
 inline std::wstring GetControlClassId(hControlClass reg);
@@ -200,6 +212,8 @@ inline void InvalidateControl(hControl c);
 inline hControlClass GetControlClass(hControl c);
 inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
 inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
+inline void UnbindClassMethod(hControlClass reg, const wchar_t* name);
+inline void UnbindClassProperty(hControlClass reg, const wchar_t* name);
 inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, unsigned int paramCount = 0);
 inline unsigned int GetEventExpectedArgc(hControlClass reg, DISPID eventId);
 inline unsigned int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name);
@@ -208,7 +222,9 @@ inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NUL
 inline hTrident FindHostFromControl(hControl c);
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
 inline void DisableDragDrop(hControl c);
-inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects = DROPEFFECT_COPY, DWORD* outEffect = NULL);
+inline void EnableDragDrop_host(hTrident h, DropCallback_host onDrop, DropEnterCallback_host onDragEnter = NULL, DropOverCallback_host onDragOver = NULL, DropLeaveCallback_host onDragLeave = NULL);
+inline void DisableDragDrop_host(hTrident h);
+inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects = DROPEFFECT_COPY);
 
 // COM implementations
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
@@ -265,7 +281,9 @@ public:
 // without knowing their C++ class layout at compile time.
 // 
 // DISPIDs count DOWN from INT32_MAX. This avoids conflicts with well-known DISPIDs
-// like CYCLECOUNT_VALUE (0), CYCLECOUNT_CYCLECOUNT (-1), CYCLECOUNT_CYCLETIMER (-5), etc.
+// like DISPID_VALUE (0), DISPID_UNKNOWN (-1), DISPID_PROPERTYPUT (-3),
+// DISPID_NEWENUM (-4), DISPID_EVALUATE (-5), DISPID_CONSTRUCTOR (-6),
+// DISPID_DESTRUCTOR (-7), and DISPID_COLLECT (-8).
 // We'll never run out - you'd need 2 billion bindings.
 // 
 // NOTE: This object lives as a member of OleSite (not heap-allocated separately),
@@ -294,6 +312,18 @@ public:
 		DISPID id = m_nextId--;
 		m_name2id[name] = id;
 		m_id2func[id] = cb;
+		LeaveCriticalSection(&m_cs);
+	}
+
+	void Unbind(const wchar_t* name) {
+		EnterCriticalSection(&m_cs);
+		auto it = m_name2id.find(name);
+		if (it == m_name2id.end()) {
+			LeaveCriticalSection(&m_cs);
+			throw std::runtime_error("Cannot unbind non-existing function!");
+		}
+		m_id2func.erase(it->second);
+		m_name2id.erase(it);
 		LeaveCriticalSection(&m_cs);
 	}
 
@@ -389,8 +419,9 @@ public:
 //  							- Provide the window.external object (GetExternal -> &ext)
 // 
 //  	IDispatch				We implement IDispatch ourselves to receive navigation
-//  							events from the browser (CYCLECOUNT_CYCLETIMER, DISPID_DOCUMENTCOMPLETE).
-//  							When the page finishes loading, we hook up our UI handler.
+//  							events from the browser (DISPID_NAVIGATECOMPLETE2).
+//  							When the document object becomes available, we hook up our
+//  							UI handler.
 class OleSite :
 	public IOleClientSite,
 	public IOleInPlaceSiteEx,
@@ -398,20 +429,31 @@ class OleSite :
 	public IObjectWithSite,
 	public IOleContainer,
 	public IDocHostUIHandler,
-	public IDispatch
+	public IDispatch,
+	public IDropTarget
 {
+	ULONG m_ref = 0; // COM reference count
+	HWND m_hwnd = NULL; // The host window we draw into
+	IUnknown* m_pUnkSite = NULL; // IObjectWithSite back-pointer
+	IOleInPlaceObject* m_pInPlace = NULL; // IE's in-place positioning interface
+	IOleObject* m_pOle = NULL; // THE main IE COM object
+	IWebBrowser2* m_pBrowser = NULL; // Our handle to the browser (Navigate, get_Document, etc.)
+	DWORD m_cookie = NULL; // Connection point cookie (for unsubscribing events)
 public:
 	ExternalDispatch ext;
+	DropCallback_host onDrop = NULL; // Drag-drop callbacks
+	DropEnterCallback_host onDragEnter = NULL;
+	DropOverCallback_host onDragOver = NULL;
+	DropLeaveCallback_host onDragLeave = NULL;
+	bool dropRegistered = false;
 
-	OleSite() : m_hwnd(NULL), m_pUnkSite(NULL), m_pView(NULL), m_pInPlace(NULL), m_pOle(NULL), m_pBrowser(NULL), m_cookie(NULL)
-	{
+	OleSite() {
 		InterlockedIncrement(&m_ref);
 	}
 
 	~OleSite() {
 		Destroy();
 		if (m_pUnkSite) m_pUnkSite->Release();
-		if (m_pView) m_pView->Release();
 		if (m_pInPlace) m_pInPlace->Release();
 	}
 
@@ -458,8 +500,7 @@ public:
 			psi->Release();
 		}
 
-		// Step 4: Get IE's drawing interface for ShowObject() redraws.
-		m_pOle->QueryInterface(IID_IViewObject, (void**)&m_pView);
+		// Step 4: Tell IE the host name (shows up in some IE dialogs/UI strings).
 		m_pOle->SetHostNames(OLESTR("TridentUI"), NULL);
 
 		// Step 5: Activate IE "in place" - this makes it create its child windows inside
@@ -484,8 +525,9 @@ public:
 		m_pOle->QueryInterface(IID_IWebBrowser2, (void**)&m_pBrowser);
 		if (!m_pBrowser) { Destroy(); return false; }
 
-		// Step 8: Subscribe to browser events (like CYCLECOUNT_CYCLETIMER)
-		// so we know when navigation completes and can hook up our UI handler.
+		// Step 8: Subscribe to browser events (like DISPID_NAVIGATECOMPLETE2)
+		// so we know when the document object becomes available and can hook
+		// up our UI handler.
 		ConnectEvents(TRUE);
 		return true;
 	}
@@ -531,6 +573,7 @@ public:
 		else if (riid == IID_IObjectWithSite) *ppv = static_cast<IObjectWithSite*>(this);
 		else if (riid == IID_IDocHostUIHandler) *ppv = static_cast<IDocHostUIHandler*>(this);
 		else if (riid == IID_IDispatch) *ppv = static_cast<IDispatch*>(this);
+		else if (riid == IID_IDropTarget) *ppv = static_cast<IDropTarget*>(this);
 		if (*ppv) { AddRef(); return S_OK; }
 		return E_NOINTERFACE;
 	}
@@ -546,15 +589,12 @@ public:
 	STDMETHODIMP GetContainer(IOleContainer** p) override {
 		return QueryInterface(IID_IOleContainer, (void**)p);
 	}
-	// ShowObject - IE says "I've just activated, you might want to redraw me"
-	STDMETHODIMP ShowObject() override {
-		if (!m_hwnd || !m_pView) return E_FAIL;
-		HDC hDC = ::GetDC(m_hwnd);
-		RECT rc; GetClientRect(m_hwnd, &rc);
-		m_pView->Draw(DVASPECT_CONTENT, -1, NULL, NULL, NULL, hDC, (RECTL*)&rc, (RECTL*)&rc, NULL, NULL);
-		::ReleaseDC(m_hwnd, hDC);
-		return S_OK;
-	}
+	// ShowObject - IE notifies host "I've activated, you might want to redraw me".
+	// Trident creates its own Internet Explorer_Server child window which receives
+	// WM_PAINT directly from Windows and handles all rendering itself, so the host
+	// has nothing to do here. Returning S_OK is the standard WebBrowser hosting
+	// pattern (matches Microsoft's reference implementations).
+	STDMETHODIMP ShowObject() override { return E_NOTIMPL; }
 	STDMETHODIMP OnShowWindow(BOOL) override { return E_NOTIMPL; }
 	STDMETHODIMP RequestNewObjectLayout() override { return E_NOTIMPL; }
 
@@ -670,7 +710,15 @@ public:
 	STDMETHODIMP ResizeBorder(LPCRECT, IOleInPlaceUIWindow*, BOOL) override { return S_FALSE; }
 	STDMETHODIMP TranslateAccelerator(LPMSG, const GUID*, DWORD) override { return S_FALSE; }
 	STDMETHODIMP GetOptionKeyPath(LPOLESTR*, DWORD) override { return S_FALSE; }
-	STDMETHODIMP GetDropTarget(IDropTarget*, IDropTarget**) override { return E_NOTIMPL; }
+	
+	// GetDropTarget - Trident asks the host "do you want to handle drops yourself?"
+	STDMETHODIMP GetDropTarget(IDropTarget*, IDropTarget** ppDropTarget) override {
+		if (!dropRegistered) return E_NOTIMPL;
+		if (!ppDropTarget) return E_POINTER;
+		*ppDropTarget = static_cast<IDropTarget*>(this);
+		AddRef();
+		return S_OK;
+	}
 
 	// GetExternal - THE KEY METHOD for the JS bridge!
 	// When JavaScript calls "window.external", IE calls this to get the IDispatch
@@ -686,16 +734,47 @@ public:
 	STDMETHODIMP FilterDataObject(IDataObject*, IDataObject**) override { return E_NOTIMPL; }
 
 	// ---- IDispatch (for browser events) ----
-	// We subscribe to DWebBrowserEvents2 to know when navigation completes.
-	// When IE fires DISPID_DOCUMENTCOMPLETE, we call SetupUIHandler() to hook
-	// our IDocHostUIHandler into the new document. This is necessary because
-	// the document object changes on every navigation.
+	// We subscribe to DWebBrowserEvents2 to know when a new document object becomes
+	// available. We hook on NAVIGATECOMPLETE2 (not DOCUMENTCOMPLETE) because it fires
+	// earlier in the navigation lifecycle - the document is visible and interactive
+	// before it has finished loading. Hooking the UI handler at NAVIGATECOMPLETE2
+	// means our IDocHostUIHandler customizations (right-click menu, drop target,
+	// scrollbars, etc.) take effect from the very first frame the user sees, not
+	// only after the page has finished loading.
 	STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
 	STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
 	STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR*, UINT, LCID, DISPID*) override { return E_NOTIMPL; }
 	STDMETHODIMP Invoke(DISPID id, REFIID riid, LCID, WORD, DISPPARAMS*, VARIANT*, EXCEPINFO*, UINT*) override {
 		if (riid != IID_NULL) return E_INVALIDARG;
-		if (id == DISPID_NAVIGATECOMPLETE2 || id == DISPID_DOCUMENTCOMPLETE) SetupUIHandler();
+		if (id == DISPID_NAVIGATECOMPLETE2) SetupUIHandler();
+		return S_OK;
+	}
+
+	// ---- IDropTarget ----
+	// These four methods are only reached when the application has called
+	// EnableDragDrop_host() to register at least one callback. GetDropTarget()
+	// returns E_NOTIMPL otherwise, so Trident never calls into us at all and
+	// uses its built-in drop target instead. When we ARE in charge, we forward
+	// every event to the user-supplied callback (if non-NULL) and let it decide
+	// what to do; if a particular callback wasn't supplied we treat that step
+	// as "do nothing, accept the drop with no effect".
+	STDMETHODIMP DragEnter(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+		if (!eff) return E_POINTER;
+		if (onDragEnter) return onDragEnter(FindNearestTridentHostFromHWND(m_hwnd), pObj, keys, pt, eff);
+		return S_OK;
+	}
+	STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* eff) override {
+		if (!eff) return E_POINTER;
+		if (onDragOver) return onDragOver(FindNearestTridentHostFromHWND(m_hwnd), keys, pt, eff);
+		return S_OK;
+	}
+	STDMETHODIMP DragLeave() override {
+		if (onDragLeave) return onDragLeave(FindNearestTridentHostFromHWND(m_hwnd));
+		return S_OK;
+	}
+	STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
+		if (!eff) return E_POINTER;
+		if (onDrop) return onDrop(FindNearestTridentHostFromHWND(m_hwnd), pObj, keys, pt, eff);
 		return S_OK;
 	}
 
@@ -788,15 +867,6 @@ private:
 		STDMETHODIMP Reset() override { m_pos = 0; return S_OK; }
 		STDMETHODIMP Clone(IEnumUnknown**) override { return E_NOTIMPL; }
 	};
-	// ---- Private members ----
-	ULONG m_ref = 0; // COM reference count
-	HWND m_hwnd = NULL; // The host window we draw into
-	IUnknown* m_pUnkSite = NULL; // IObjectWithSite back-pointer
-	IViewObject* m_pView = NULL; // IE's drawing interface
-	IOleInPlaceObject* m_pInPlace = NULL; // IE's in-place positioning interface
-	IOleObject* m_pOle = NULL; // THE main IE COM object
-	IWebBrowser2* m_pBrowser = NULL; // Our handle to the browser (Navigate, get_Document, etc.)
-	DWORD m_cookie = NULL; // Connection point cookie (for unsubscribing events)
 };
 
 // TridentWindowData_ - the internal data behind an hTrident handle.
@@ -1006,6 +1076,10 @@ inline IWebBrowser2* GetTridentBrowser(hTrident h) {
 
 inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb) {
 	if (h && h->site) h->site->ext.Bind(name, cb);
+}
+
+inline void UnbindFunction(hTrident h, const wchar_t* name) {
+	if (h && h->site) h->site->ext.Unbind(name);
 }
 
 inline void SetWndProc(hTrident h, TridentWndProc proc) { if (h) h->userProc = proc; }
@@ -1335,12 +1409,12 @@ inline VARIANT GetDispatchSize(VARIANT* arr) {
 	return DispatchGetNamedProperty(arr->pdispVal, L"length");
 }
 
-inline void DispatchResize(VARIANT* arr, unsigned int newSize) {
+inline void DispatchResize(VARIANT* arr, unsigned int newsize) {
 	if (!arr || arr->vt != VT_DISPATCH || !arr->pdispVal) return;
-	VARIANT sizeVar;
-	sizeVar.vt = VT_UI4;
-	sizeVar.ulVal = newSize;
-	DispatchSetNamedProperty(arr->pdispVal, L"length", &sizeVar);
+	VARIANT sizevar;
+	sizevar.vt = VT_UI4;
+	sizevar.ulVal = newsize;
+	DispatchSetNamedProperty(arr->pdispVal, L"length", &sizevar);
 }
 
 inline VARIANT GetDispatchProperty(VARIANT* obj, const wchar_t* prop) {
@@ -1666,7 +1740,7 @@ inline void RemoveElement(hTrident h, const wchar_t* id) {
 //  	IObjectSafety				- "Trust me, I'm safe" (self-declaration)
 //  	IDispatch					- Methods and properties callable from JavaScript
 //  	IConnectionPointContainer	- Outbound events (C++ -> JS)
-//  	IDropTarget/IDropSource		- OLE drag & drop
+//  	IDropTarget					- OLE drag & drop (drop target for hosted controls)
 //  	IProvideClassInfo2			- Tells IE which outbound event interface to use
 
 // CLSIDFromName - generates a deterministic GUID from a control name using MD5 hash.
@@ -1999,6 +2073,30 @@ inline std::map<CLSID, ControlReg_*, CLSIDCompare>& CtrlRegistry() {
 	return s;
 }
 
+// HIMETRIC <-> pixel conversion helpers.
+// HIMETRIC is the unit IE uses for ActiveX control sizing - 1 HIMETRIC = 0.01mm,
+// so 2540 HIMETRIC = 1 inch. To convert to pixels we need the screen DPI, NOT
+// the legacy assumption of 96. These helpers honor the actual screen DPI to
+// match the DOCHOSTUIFLAG_DPI_AWARE flag set in OleSite::GetHostInfo.
+// X and Y are converted in pairs because GetDeviceCaps may return slightly
+// different values for LOGPIXELSX vs LOGPIXELSY on some displays.
+static inline void HimetricToPixel(LONG hx, LONG hy, int& px, int& py) {
+	HDC hdc = GetDC(NULL);
+	int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+	int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+	ReleaseDC(NULL, hdc);
+	px = MulDiv(hx, dpiX, 2540);
+	py = MulDiv(hy, dpiY, 2540);
+}
+static inline void PixelToHimetric(int px, int py, LONG& hx, LONG& hy) {
+	HDC hdc = GetDC(NULL);
+	int dpiX = GetDeviceCaps(hdc, LOGPIXELSX);
+	int dpiY = GetDeviceCaps(hdc, LOGPIXELSY);
+	ReleaseDC(NULL, hdc);
+	hx = MulDiv(px, 2540, dpiX);
+	hy = MulDiv(py, 2540, dpiY);
+}
+
 // ControlInstance_ - per-instance data for each <object> tag on a page.
 // If you have 3 <object> tags with the same classid, you get 3 ControlInstance_ objects
 // but they all share the same ControlReg_ (same WndProc, same methods).
@@ -2026,15 +2124,21 @@ class CtrlConnectionPoint;
 inline LRESULT CALLBACK CtrlWndProc(HWND, UINT, WPARAM, LPARAM);
 
 class ActiveXControl :
-	public IOleObject, public IOleInPlaceObject, public IOleInPlaceActiveObject,
-	public IOleControl, public IViewObject2, public IPersistStreamInit,
-	public IObjectSafety, public IDispatch, public IConnectionPointContainer,
-	public IDropTarget, public IDropSource, public IProvideClassInfo2
+	public IOleObject,
+	public IOleInPlaceObject,
+	public IOleInPlaceActiveObject,
+	public IOleControl,
+	public IViewObject2,
+	public IPersistStreamInit,
+	public IObjectSafety,
+	public IDispatch,
+	public IConnectionPointContainer,
+	public IDropTarget,
+	public IProvideClassInfo2
 {
-public:
 	ULONG m_ref = 0;
 	ControlInstance_* m_inst = NULL;
-
+public:
 	ActiveXControl(ControlReg_* reg) {
 		InterlockedIncrement(&m_ref);
 		m_inst = new ControlInstance_();
@@ -2067,7 +2171,6 @@ public:
 		else if (riid == IID_IDispatch)  *ppv = static_cast<IDispatch*>(this);
 		else if (riid == IID_IConnectionPointContainer) *ppv = static_cast<IConnectionPointContainer*>(this);
 		else if (riid == IID_IDropTarget) *ppv = static_cast<IDropTarget*>(this);
-		else if (riid == IID_IDropSource) *ppv = static_cast<IDropSource*>(this);
 		else if (riid == IID_IProvideClassInfo || riid == IID_IProvideClassInfo2) *ppv = static_cast<IProvideClassInfo2*>(this);
 		if (*ppv) { AddRef(); return S_OK; }
 		return E_NOINTERFACE;
@@ -2177,13 +2280,12 @@ public:
 	// SetExtent - IE tells us how big we should be, in HIMETRIC units (1 HIMETRIC = 0.01mm).
 	// This gets called BEFORE DoVerb, from the HTML width/height attributes.
 	// We store it so DoVerb can use it as fallback when IE gives us a zero-size rect.
-	// Conversion: pixels = HIMETRIC * 96 / 2540 (at standard 96 DPI)
 	STDMETHODIMP SetExtent(DWORD dwAspect, SIZEL* pSizel) override {
 		if (dwAspect != DVASPECT_CONTENT || !pSizel) return E_INVALIDARG;
 		m_inst->extent = *pSizel;
 		if (m_inst->hwnd) {
-			int w = MulDiv(pSizel->cx, 96, 2540);
-			int h = MulDiv(pSizel->cy, 96, 2540);
+			int w = 0, h = 0;
+			HimetricToPixel(pSizel->cx, pSizel->cy, w, h);
 			SetWindowPos(m_inst->hwnd, NULL, 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER);
 		}
 		return S_OK;
@@ -2194,8 +2296,9 @@ public:
 			*p = m_inst->extent;
 		}
 		else {
-			p->cx = MulDiv(m_inst->rcPos.right - m_inst->rcPos.left, 2540, 96);
-			p->cy = MulDiv(m_inst->rcPos.bottom - m_inst->rcPos.top, 2540, 96);
+			PixelToHimetric(m_inst->rcPos.right - m_inst->rcPos.left,
+			                m_inst->rcPos.bottom - m_inst->rcPos.top,
+			                p->cx, p->cy);
 		}
 		return S_OK;
 	}
@@ -2378,12 +2481,12 @@ public:
 	STDMETHODIMP DragEnter(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
 		if (!eff) return E_POINTER;
 		if (m_inst->onDragEnter) return m_inst->onDragEnter(m_inst, pObj, keys, pt, eff);
-		*eff = DROPEFFECT_NONE; return S_OK;
+		return S_OK;
 	}
 	STDMETHODIMP DragOver(DWORD keys, POINTL pt, DWORD* eff) override {
 		if (!eff) return E_POINTER;
 		if (m_inst->onDragOver) return m_inst->onDragOver(m_inst, keys, pt, eff);
-		*eff = DROPEFFECT_NONE; return S_OK;
+		return S_OK;
 	}
 	STDMETHODIMP DragLeave(void) override {
 		if (m_inst->onDragLeave) return m_inst->onDragLeave(m_inst);
@@ -2392,15 +2495,8 @@ public:
 	STDMETHODIMP Drop(IDataObject* pObj, DWORD keys, POINTL pt, DWORD* eff) override {
 		if (!eff) return E_POINTER;
 		if (m_inst->onDrop) return m_inst->onDrop(m_inst, pObj, keys, pt, eff);
-		*eff = DROPEFFECT_NONE; return S_OK;
-	}
-
-	STDMETHODIMP QueryContinueDrag(BOOL fEsc, DWORD keys) override {
-		if (fEsc) return DRAGDROP_S_CANCEL;
-		if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
 		return S_OK;
 	}
-	STDMETHODIMP GiveFeedback(DWORD) override { return DRAGDROP_S_USEDEFAULTCURSORS; }
 };
 
 // CtrlWndProc - the internal window procedure for ActiveX control child windows.
@@ -2530,22 +2626,28 @@ public:
 	STDMETHODIMP LockServer(BOOL) override { return S_OK; }
 };
 
-// SimpleDataObject - a minimal IDataObject that holds Unicode text.
-// Used for OLE drag & drop. Usage:
-//  	IDataObject* pDO = new SimpleDataObject(L"hello");
-//  	DWORD effect;
-//  	DoDragDrop(pDO, pDropSource, DROPEFFECT_COPY, &effect);
-//  	pDO->Release();
-class SimpleDataObject : public IDataObject {
+class TridentDataObject : public IDataObject {
+	struct ProviderEntry {
+		CLIPFORMAT cfFormat;
+		DWORD tymedMask;
+		DataProvider provider;
+	};
+	struct HandlerEntry {
+		CLIPFORMAT cfFormat;
+		DWORD tymedMask;
+		DataHandler handler;
+	};
 	ULONG m_ref = 0;
-	std::wstring m_text;
+	std::vector<ProviderEntry> m_providers = {};
+	std::vector<HandlerEntry> m_handlers = {};
 public:
-	SimpleDataObject(const wchar_t* text) : m_text(text ? text : L"") {
-		InterlockedIncrement(&m_ref);
-	}
+	TridentDataObject() { InterlockedIncrement(&m_ref); }
+
 	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+		if (!ppv) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IDataObject) {
-			*ppv = this; AddRef();
+			*ppv = static_cast<IDataObject*>(this);
+			AddRef();
 			return S_OK;
 		}
 		*ppv = NULL;
@@ -2553,27 +2655,142 @@ public:
 	}
 	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
 	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
-	STDMETHODIMP GetData(FORMATETC* pFmt, STGMEDIUM* pMed) override {
-		if (!pFmt || !pMed) return E_POINTER;
-		if (pFmt->cfFormat != CF_UNICODETEXT || !(pFmt->tymed & TYMED_HGLOBAL)) return DV_E_FORMATETC;
-		size_t bytes = (m_text.size() + 1) * sizeof(wchar_t);
-		HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, bytes);
-		if (!hg) return E_OUTOFMEMORY;
-		void* dst = GlobalLock(hg);
-		if (!dst) { GlobalFree(hg); return E_OUTOFMEMORY; }
-		memcpy(dst, m_text.c_str(), bytes);
-		GlobalUnlock(hg);
-		pMed->tymed = TYMED_HGLOBAL; pMed->hGlobal = hg; pMed->pUnkForRelease = NULL;
-		return S_OK;
+
+	inline void RegisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask, DataProvider provider) {
+		m_providers.push_back({ cfFormat, tymedMask, std::move(provider) });
 	}
-	STDMETHODIMP GetDataHere(FORMATETC*, STGMEDIUM*) override { return E_NOTIMPL; }
-	STDMETHODIMP QueryGetData(FORMATETC* p) override { if (!p) return E_POINTER; return (p->cfFormat == CF_UNICODETEXT && (p->tymed & TYMED_HGLOBAL)) ? S_OK : DV_E_FORMATETC; }
-	STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* p) override { if (!p) return E_POINTER; p->ptd = NULL; return DATA_S_SAMEFORMATETC; }
-	STDMETHODIMP SetData(FORMATETC*, STGMEDIUM*, BOOL) override { return E_NOTIMPL; }
-	STDMETHODIMP EnumFormatEtc(DWORD, IEnumFORMATETC**) override { return E_NOTIMPL; }
-	STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override { return OLE_E_ADVISENOTSUPPORTED; }
-	STDMETHODIMP DUnadvise(DWORD) override { return OLE_E_ADVISENOTSUPPORTED; }
-	STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override { return OLE_E_ADVISENOTSUPPORTED; }
+
+	inline void UnregisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask) {
+		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) {
+				m_providers.erase(it);
+				return;
+			}
+		}
+	}
+
+	inline bool HasProvider(CLIPFORMAT cfFormat, DWORD tymedMask) const {
+		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) return true;
+		}
+		return false;
+	}
+
+	inline void RegisterHandler(CLIPFORMAT cfFormat, DWORD tymedMask, DataHandler handler) {
+		m_handlers.push_back({ cfFormat, tymedMask, std::move(handler) });
+	}
+
+	inline void UnregisterHandler(CLIPFORMAT cfFormat, DWORD tymedMask) {
+		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
+			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) {
+				m_handlers.erase(it);
+				return;
+			}
+		}
+	}
+
+	inline bool HasHandler(CLIPFORMAT cfFormat, DWORD tymedMask) const {
+		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
+			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) return true;
+		}
+		return false;
+	}
+
+	// GetData - "give me the data for this format, you pick the medium"
+	STDMETHODIMP GetData(FORMATETC* pfmt, STGMEDIUM* pmed) override {
+		if (!pfmt || !pmed) return E_POINTER;
+		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+			if (it->cfFormat != pfmt->cfFormat) continue;
+			if (it->tymedMask & TYMED_HERE) continue; // filter out 'here' entries
+			const DWORD common = (it->tymedMask & TYMED_MASK) & (pfmt->tymed & TYMED_MASK);
+			if (!common) continue;
+			ZeroMemory(pmed, sizeof(STGMEDIUM));
+			return it->provider(pfmt->cfFormat, common, pfmt->lindex, pfmt->dwAspect, pmed);
+		}
+		return DV_E_FORMATETC;
+	}
+
+	// GetDataHere - "write the data INTO the medium I've already allocated"
+	STDMETHODIMP GetDataHere(FORMATETC* pfmt, STGMEDIUM* pmed) override {
+		if (!pfmt || !pmed) return E_POINTER;
+		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+			if (it->cfFormat != pfmt->cfFormat) continue;
+			if (!(it->tymedMask & TYMED_HERE)) continue; // only 'here' entries
+			const DWORD common = (it->tymedMask & TYMED_MASK) & (pmed->tymed & TYMED_MASK);
+			if (!common) continue;
+			// No ZeroMemory!
+			return it->provider(pfmt->cfFormat, common | TYMED_HERE, pfmt->lindex, pfmt->dwAspect, pmed);
+		}
+		return DV_E_FORMATETC;
+	}
+
+	// QueryGetData - "do you support this format at all?"
+	STDMETHODIMP QueryGetData(FORMATETC* pfmt) override {
+		if (!pfmt) return E_POINTER;
+		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+			if (it->cfFormat != pfmt->cfFormat) continue;
+			if ((it->tymedMask & TYMED_MASK) & (pfmt->tymed & TYMED_MASK)) return S_OK;
+		}
+		return DV_E_FORMATETC;
+	}
+
+	// GetCanonicalFormatEtc - "do different target devices produce different data for this format?"
+	STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* pfmtOut) override {
+		// Always answer "no difference"
+		if (pfmtOut) pfmtOut->ptd = NULL;
+		return DATA_S_SAMEFORMATETC;
+	}
+
+	// SetData - "here is some data, do what you want with it"
+	STDMETHODIMP SetData(FORMATETC* pfmt, STGMEDIUM* pmed, BOOL fRelease) override {
+		if (!pfmt || !pmed) return E_POINTER;
+		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
+			if (it->cfFormat != pfmt->cfFormat) continue;
+			const DWORD common = (it->tymedMask & TYMED_MASK) & (pmed->tymed & TYMED_MASK);
+			if (!common) continue;
+			HRESULT hr = it->handler(pfmt->cfFormat, common, pfmt->lindex, pfmt->dwAspect, pmed);
+			if (fRelease) ReleaseStgMedium(pmed);
+			return hr;
+		}
+		return DV_E_FORMATETC;
+	}
+
+	// EnumFormatEtc - "list all formats you can produce / accept"
+	STDMETHODIMP EnumFormatEtc(DWORD dwDirection, IEnumFORMATETC** ppEnum) override {
+		if (!ppEnum) return E_POINTER;
+		*ppEnum = NULL;
+		std::vector<FORMATETC> items;
+		if (dwDirection == DATADIR_GET) {
+			items.reserve(m_providers.size());
+			for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
+				items.push_back({ it->cfFormat, NULL, DVASPECT_CONTENT, -1, it->tymedMask & TYMED_MASK });
+			}
+		}
+		else if (dwDirection == DATADIR_SET) {
+			items.reserve(m_handlers.size());
+			for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
+				items.push_back({ it->cfFormat, NULL, DVASPECT_CONTENT, -1, it->tymedMask & TYMED_MASK });
+			}
+		}
+		else {
+			return E_INVALIDARG;
+		}
+		// SHCreateStdEnumFmtEtc copies the FORMATETC array internally, so
+		// we can let `items` go out of scope and be destroyed immediately.
+		// The shell-provided enumerator owns its own copy.
+		return SHCreateStdEnumFmtEtc((UINT)items.size(), items.data(), ppEnum);
+	}
+
+	// DAdvise / DUnadvise / EnumDAdvise - Completely unrelated to OLE Dnd & OLE Clipboard.
+	STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
+		return OLE_E_ADVISENOTSUPPORTED;
+	}
+	STDMETHODIMP DUnadvise(DWORD) override {
+		return OLE_E_ADVISENOTSUPPORTED;
+	}
+	STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override {
+		return OLE_E_ADVISENOTSUPPORTED;
+	}
 };
 
 // ActiveX API implementations
@@ -2729,13 +2946,15 @@ inline hTrident FindHostFromControl(hControl c) {
 
 inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter, DropOverCallback onDragOver, DropLeaveCallback onDragLeave) {
 	if (!c || !c->hwnd) return;
-	c->onDrop = onDrop; c->onDragEnter = onDragEnter; c->onDragOver = onDragOver; c->onDragLeave = onDragLeave;
+	c->onDrop = onDrop;
+	c->onDragEnter = onDragEnter;
+	c->onDragOver = onDragOver;
+	c->onDragLeave = onDragLeave;
 	if (!c->dropRegistered) {
 		ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
 		if (ctrl) {
 			HRESULT hr = RegisterDragDrop(c->hwnd, static_cast<IDropTarget*>(ctrl));
-			if (SUCCEEDED(hr) || hr == DRAGDROP_E_ALREADYREGISTERED)
-				c->dropRegistered = true;
+			if (SUCCEEDED(hr) || hr == DRAGDROP_E_ALREADYREGISTERED) c->dropRegistered = true;
 		}
 	}
 }
@@ -2750,10 +2969,26 @@ inline void DisableDragDrop(hControl c) {
 	c->onDragLeave = NULL;
 }
 
-inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects, DWORD* outEffect) {
+inline void EnableDragDrop_host(hTrident h, DropCallback_host onDrop, DropEnterCallback_host onDragEnter, DropOverCallback_host onDragOver, DropLeaveCallback_host onDragLeave) {
+	if (!h || !h->site) return;
+	h->site->dropRegistered = true;
+	h->site->onDrop = onDrop;
+	h->site->onDragEnter = onDragEnter;
+	h->site->onDragOver = onDragOver;
+	h->site->onDragLeave = onDragLeave;
+}
+
+inline void DisableDragDrop_host(hTrident h) {
+	if (!h || !h->site || !h->site->dropRegistered) return;
+	h->site->dropRegistered = false;
+	h->site->onDrop = NULL;
+	h->site->onDragEnter = NULL;
+	h->site->onDragOver = NULL;
+	h->site->onDragLeave = NULL;
+}
+
+inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects) {
 	if (!c || !c->hwnd || !data) return E_INVALIDARG;
-	ActiveXControl* ctrl = (ActiveXControl*)GetWindowLongPtr(c->hwnd, GWLP_USERDATA);
-	if (!ctrl) return E_FAIL;
-	HRESULT hr = DoDragDrop(data, static_cast<IDropSource*>(ctrl), allowedEffects, outEffect);
-	return hr;
+	DWORD trash = 0;
+	return SHDoDragDrop(c->hwnd, data, NULL, allowedEffects, &trash);
 }
