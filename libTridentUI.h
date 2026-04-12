@@ -117,7 +117,7 @@ enum InsertLocation { BEFORE_BEGIN, AFTER_BEGIN, BEFORE_END, AFTER_END };
 //  	args[0].vt = VT_BSTR; args[0].bstrVal = SysAllocString(L"hello"); // last arg first
 //  	args[1].vt = VT_I4; args[1].lVal = 42; // first arg last
 //  	FireEvent(c, evtId, args);
-using MethodCallback = std::function<HRESULT(hTrident, DISPPARAMS*, VARIANT*)>;
+
 using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
 
 typedef LRESULT(*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
@@ -194,10 +194,7 @@ inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, cons
 inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html);
 inline void RemoveElement(hTrident h, const wchar_t* id);
 
-using DataProvider = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
-using DataHandler = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
-static constexpr DWORD TYMED_MASK = 0x7FFFFFFF;
-static constexpr DWORD TYMED_HERE = 0x80000000;
+
 
 inline CLSID CLSIDFromName(const wchar_t* name);
 inline std::wstring CLSIDToString(const CLSID& clsid);
@@ -230,41 +227,46 @@ inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects
 inline const wchar_t* g_trident_wndclass = L"libTridentUI";
 inline TridentWindowData_* g_trident_head = NULL;
 
+using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
+
 // MethodDispatch - Provides JS a callable function pointer, used in GetExternalFunction().
 class MethodDispatch : public IDispatch {
-	ULONG m_ref = 0;
-	MethodCallback m_fn;
+	ULONG COM_REFERENCE_COUNTER = 0;
+	MethodCallback TargetFunction;
 public:
-	MethodDispatch(MethodCallback cb) : m_fn(cb) { InterlockedIncrement(&m_ref); }
-	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+	MethodDispatch(MethodCallback Function) : TargetFunction(Function) { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+		if (!ppvObject) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IDispatch) {
-			*ppv = static_cast<IDispatch*>(this);
+			*ppvObject = static_cast<IDispatch*>(this);
 			AddRef();
 			return S_OK;
 		}
-		*ppv = NULL;
+		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
-	STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
-	STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
-	STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
-		for (UINT i = 0; i < cnt; i++) {
-			if (!names[i] || !names[i][0]) {
-				ids[i] = DISPID_VALUE;
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) {
+		HRESULT Result = S_OK;
+		for (UINT Name = 0; Name < cNames; Name++) {
+			if (!rgszNames[Name] || !rgszNames[Name][0]) {
+				rgDispId[Name] = DISPID_VALUE;
 			}
 			else {
-				ids[i] = DISPID_UNKNOWN;
-				return DISP_E_UNKNOWNNAME;
+				rgDispId[Name] = DISPID_UNKNOWN;
+				Result = DISP_E_UNKNOWNNAME;
 			}
 		}
-		return S_OK;
+		return Result;
 	}
-	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
-		if (id == DISPID_VALUE && (wf & DISPATCH_METHOD)) {
-			if (res) VariantInit(res);
-			return m_fn(dp, res);
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) {
+		if (dispIdMember != DISPID_VALUE) return DISP_E_MEMBERNOTFOUND;
+		if (wFlags & DISPATCH_METHOD) {
+			if (pVarResult) VariantInit(pVarResult);
+			return TargetFunction(pDispParams, pVarResult);
 		}
 		return DISP_E_MEMBERNOTFOUND;
 	}
@@ -285,100 +287,55 @@ public:
 // DISPID_NEWENUM (-4), DISPID_EVALUATE (-5), DISPID_CONSTRUCTOR (-6),
 // DISPID_DESTRUCTOR (-7), and DISPID_COLLECT (-8).
 // We'll never run out - you'd need 2 billion bindings.
-// 
-// NOTE: This object lives as a member of OleSite (not heap-allocated separately),
-// so its Release() intentionally does NOT delete this. Its lifetime is tied to OleSite.
 class ExternalDispatch : public IDispatch {
-	ULONG m_ref = 0;
-	CRITICAL_SECTION m_cs;
-	DISPID m_nextId = INT32_MAX;
-	std::map<std::wstring, DISPID> m_name2id = {};
-	std::map<DISPID, MethodCallback> m_id2func = {};
-
+	ULONG COM_REFERENCE_COUNTER = 0;
+	DISPID NextID = INT32_MAX;
+	std::map<std::wstring, DISPID> MapNameToID = {};
+	std::map<DISPID, MethodCallback> MapIDToFuncPtr = {};
 public:
-	ExternalDispatch() { InitializeCriticalSection(&m_cs); }
-	~ExternalDispatch() { DeleteCriticalSection(&m_cs); }
-
-	void Bind(const wchar_t* name, MethodCallback cb) {
-		EnterCriticalSection(&m_cs);
-		if (m_name2id.find(name) != m_name2id.end()) {
-			LeaveCriticalSection(&m_cs);
-			throw std::runtime_error("Function already exists");
-		}
-		if (m_nextId <= 0) {
-			LeaveCriticalSection(&m_cs);
-			throw std::runtime_error("Cannot allocate more function IDs");
-		}
-		DISPID id = m_nextId--;
-		m_name2id[name] = id;
-		m_id2func[id] = cb;
-		LeaveCriticalSection(&m_cs);
-	}
-
-	void Unbind(const wchar_t* name) {
-		EnterCriticalSection(&m_cs);
-		auto it = m_name2id.find(name);
-		if (it == m_name2id.end()) {
-			LeaveCriticalSection(&m_cs);
-			throw std::runtime_error("Cannot unbind non-existing function!");
-		}
-		m_id2func.erase(it->second);
-		m_name2id.erase(it);
-		LeaveCriticalSection(&m_cs);
-	}
-
-	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
+	ExternalDispatch() {InterlockedIncrement(&COM_REFERENCE_COUNTER);}
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
 		if (riid == IID_IUnknown || riid == IID_IDispatch) {
-			*ppv = static_cast<IDispatch*>(this);
+			*ppvObject = static_cast<IDispatch*>(this);
 			AddRef();
 			return S_OK;
 		}
-		*ppv = NULL;
+		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { return InterlockedDecrement(&m_ref); }
-
-	STDMETHODIMP GetTypeInfoCount(UINT* p) override { if (!p) return E_POINTER; *p = 0; return S_OK; }
-	STDMETHODIMP GetTypeInfo(UINT, LCID, ITypeInfo**) override { return E_NOTIMPL; }
-
-	// GetIDsOfNames - IE calls this to convert "Add" -> numeric DISPID.
-	// When JS does window.external.Add(1,2), IE first asks us "what's the ID for 'Add'?"
-	STDMETHODIMP GetIDsOfNames(REFIID, LPOLESTR* names, UINT cnt, LCID, DISPID* ids) override {
-		HRESULT hr = S_OK;
-		EnterCriticalSection(&m_cs);
-		for (UINT i = 0; i < cnt; i++) {
-			auto it = m_name2id.find(names[i]);
-			if (it != m_name2id.end()) {
-				ids[i] = it->second;
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) {
+		HRESULT Result = S_OK;
+		for (UINT Name = 0; Name < cNames; Name++) {
+			auto Found = MapNameToID.find(rgszNames[Name]);
+			if (Found != MapNameToID.end()) {
+				rgDispId[Name] = Found->second;
 			}
 			else {
-				ids[i] = DISPID_UNKNOWN;
-				hr = DISP_E_UNKNOWNNAME;
+				rgDispId[Name] = DISPID_UNKNOWN;
+				Result = DISP_E_UNKNOWNNAME;
 			}
 		}
-		LeaveCriticalSection(&m_cs);
-		return hr;
+		return Result;
 	}
-
-	// Invoke - IE calls this with the DISPID from GetIDsOfNames + the JS arguments.
-	// We look up the C++ callback and call it. Note: we copy the callback THEN unlock
-	// the critical section BEFORE calling the user's code. This prevents deadlocks if
-	// the user's callback tries to bind more functions.
-	STDMETHODIMP Invoke(DISPID id, REFIID, LCID, WORD wf, DISPPARAMS* dp, VARIANT* res, EXCEPINFO*, UINT*) override {
-		EnterCriticalSection(&m_cs);
-		auto it = m_id2func.find(id);
-		if (it == m_id2func.end()) { LeaveCriticalSection(&m_cs); return DISP_E_MEMBERNOTFOUND; }
-		auto fn = it->second;
-		LeaveCriticalSection(&m_cs);
-		if (wf & DISPATCH_METHOD) {
-			if (res) VariantInit(res);
-			return fn(dp, res);
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) {
+		auto Found = MapIDToFuncPtr.find(dispIdMember);
+		if (Found == MapIDToFuncPtr.end()) {
+			return DISP_E_MEMBERNOTFOUND;
 		}
-		if (wf & DISPATCH_PROPERTYGET) {
-			if (res) {
-				res->vt = VT_DISPATCH;
-				res->pdispVal = new MethodDispatch(fn);
+		auto Function = Found->second;
+		if (wFlags & DISPATCH_METHOD) {
+			if (pVarResult) VariantInit(pVarResult);
+			return Function(pDispParams, pVarResult);
+		}
+		if (wFlags & DISPATCH_PROPERTYGET) {
+			if (pVarResult) {
+				VariantInit(pVarResult);
+				pVarResult->vt = VT_DISPATCH;
+				pVarResult->pdispVal = new MethodDispatch(Function);
 				return S_OK;
 			}
 			else {
@@ -387,6 +344,315 @@ public:
 		}
 		return DISP_E_MEMBERNOTFOUND;
 	}
+	void RegisterMethod(const std::wstring& MethodName, MethodCallback FuncPtr) {
+		auto Found = MapNameToID.find(MethodName);
+		if (Found != MapNameToID.end()) {
+			// The user might have unregistered and then re-registered a different function with the same name.
+			// So we need to do a second check here:
+			auto PtrFound = MapIDToFuncPtr.find(Found->second);
+			if (PtrFound != MapIDToFuncPtr.end()) {
+				// If the function is found in both maps, throw an error.
+				throw std::runtime_error("Function already exists");
+			}
+			else {
+				// The name exists in the ID map but pointer is missing in the function map.
+				// This can happen if the user unregistered a function then re-registered a different function with the same name.
+				// We need to keep the ID map untouched and only add a new registration in the function map.
+				MapIDToFuncPtr[Found->second] = FuncPtr;
+			}
+		}
+		else {
+			// This is a new function name that has not been registered in the ID map before, so let's add a new entry now.
+			if (NextID <= 0) {
+				// We run out of function IDs!
+				throw std::runtime_error("Cannot allocate more function IDs");
+			}
+			DISPID FuncID = NextID--;
+			MapNameToID[MethodName] = FuncID;
+			MapIDToFuncPtr[FuncID] = FuncPtr;
+		}
+	}
+	void UnregisterMethod(const std::wstring& MethodName) {
+		auto Found = MapNameToID.find(MethodName);
+		if (Found == MapNameToID.end()) {
+			// The user is trying to unregister a function that doesn't exist in the map!
+			throw std::runtime_error("Cannot unregister non-existing function!");
+		}
+		else {
+			auto PtrFound = MapIDToFuncPtr.find(Found->second);
+			if (PtrFound == MapIDToFuncPtr.end()) {
+				// The user is trying to unregister a function that has already been unregistered!
+				throw std::runtime_error("Cannot unregister non-existing function!");
+			}
+			else {
+				// Only remove the function entry in the function map, never remove any entries in the ID map!
+				// Since IE may cache the lookup results from the ID map to speedup code execution,
+				// so we much ensure the next method the user registers with the same name always has the same ID.
+				MapIDToFuncPtr.erase(Found->second);
+			}
+		}
+	}
+};
+
+class WebBrowserSite :
+	public IOleClientSite,
+	public IOleInPlaceSite,
+	public IOleInPlaceFrame,
+	public IDocHostUIHandler,
+	public IDropTarget,
+	public IServiceProvider,
+	public IInternetSecurityManager,
+	public IDispatch
+{
+	ULONG COM_REFERENCE_COUNTER = 0;
+	ExternalDispatch* ExtDisp = NULL;
+	HWND MainWindow = NULL;
+public:
+	WebBrowserSite(HWND hParent) :MainWindow(hParent) {
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
+		ExtDisp = new ExternalDispatch();
+	}
+	~WebBrowserSite() {
+		if (ExtDisp) {
+			ExtDisp->Release();
+			ExtDisp = NULL;
+		}
+	}
+	// IE will ask us "do you support this interface", and we need to say "S_OK" to every interface we've implemented and also provide a vtable for that specific interface.
+	// Here, we'll use static_cast to create the correct vtable of the interface asked.
+	// IE might also ask us to provide child interfaces that the parent interface has inherited. For example: IOleWindow inherited by IOleInPlaceSite.
+	// You can Ctrl + LeftClick on IOleInPlaceSite and you should see this:
+	//  	MIDL_INTERFACE("00000119-0000-0000-C000-000000000046")
+    //  	IOleInPlaceSite : public IOleWindow
+    //  	{
+    //  	public:
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+		if (!ppvObject) return E_POINTER;
+		if (riid == IID_IUnknown || riid == IID_IOleClientSite) {
+			*ppvObject = static_cast<IOleClientSite*>(this);
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IOleInPlaceSite) {
+			*ppvObject = static_cast<IOleInPlaceSite*>(this);
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IOleWindow) {
+			*ppvObject = static_cast<IOleWindow*>(static_cast<IOleInPlaceSite*>(this));
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IOleInPlaceFrame) {
+			*ppvObject = static_cast<IOleInPlaceFrame*>(this);
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IOleInPlaceUIWindow) {
+			*ppvObject = static_cast<IOleInPlaceUIWindow*>(static_cast<IOleInPlaceFrame*>(this));
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IDocHostUIHandler) {
+			*ppvObject = static_cast<IDocHostUIHandler*>(this);
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IDropTarget) {
+			*ppvObject = static_cast<IDropTarget*>(this);
+			AddRef();
+			return S_OK;
+		}
+		if (riid == IID_IServiceProvider) {
+			*ppvObject = static_cast<IServiceProvider*>(this);
+		}
+		*ppvObject = NULL;
+		return E_NOINTERFACE;
+	}
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); };
+	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	// IOleClientSite implementations
+	virtual HRESULT STDMETHODCALLTYPE SaveObject(void) { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetMoniker(DWORD dwAssign, DWORD dwWhichMoniker, __RPC__deref_out_opt IMoniker** ppmk) {
+		if (ppmk) *ppmk = NULL;
+		return E_NOTIMPL;
+	}
+	virtual HRESULT STDMETHODCALLTYPE GetContainer(__RPC__deref_out_opt IOleContainer** ppContainer) {
+		if (ppContainer) *ppContainer = NULL;
+		return E_NOINTERFACE;
+	}
+	virtual HRESULT STDMETHODCALLTYPE ShowObject(void) { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnShowWindow(BOOL fShow) { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE RequestNewObjectLayout(void) { return E_NOTIMPL; }
+
+
+	virtual HRESULT STDMETHODCALLTYPE CanInPlaceActivate(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnInPlaceActivate(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnUIActivate(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetWindowContext(__RPC__deref_out_opt IOleInPlaceFrame** ppFrame, __RPC__deref_out_opt IOleInPlaceUIWindow** ppDoc, __RPC__out LPRECT lprcPosRect, __RPC__out LPRECT lprcClipRect, __RPC__inout LPOLEINPLACEFRAMEINFO lpFrameInfo);
+
+
+	virtual HRESULT STDMETHODCALLTYPE Scroll(SIZE scrollExtant);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnUIDeactivate(BOOL fUndoable);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnInPlaceDeactivate(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE DiscardUndoState(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE DeactivateAndUndo(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnPosRectChange(__RPC__in LPCRECT lprcPosRect);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetWindow(__RPC__deref_out_opt HWND* phwnd);
+
+
+	virtual HRESULT STDMETHODCALLTYPE ContextSensitiveHelp(BOOL fEnterMode);
+
+
+	virtual HRESULT STDMETHODCALLTYPE InsertMenus(__RPC__in HMENU hmenuShared, __RPC__inout LPOLEMENUGROUPWIDTHS lpMenuWidths);
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetMenu(__RPC__in HMENU hmenuShared, __RPC__in HOLEMENU holemenu, __RPC__in HWND hwndActiveObject);
+
+
+	virtual HRESULT STDMETHODCALLTYPE RemoveMenus(__RPC__in HMENU hmenuShared);
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetStatusText(__RPC__in_opt LPCOLESTR pszStatusText);
+
+
+	virtual HRESULT STDMETHODCALLTYPE EnableModeless(BOOL fEnable);
+
+
+	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(__RPC__in LPMSG lpmsg, WORD wID);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetBorder(__RPC__out LPRECT lprectBorder);
+
+
+	virtual HRESULT STDMETHODCALLTYPE RequestBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths);
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths);
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetActiveObject(__RPC__in_opt IOleInPlaceActiveObject* pActiveObject, __RPC__in_opt_string LPCOLESTR pszObjName);
+
+
+	virtual HRESULT STDMETHODCALLTYPE ShowContextMenu(_In_ DWORD dwID, _In_ POINT* ppt, _In_ IUnknown* pcmdtReserved, _In_ IDispatch* pdispReserved);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetHostInfo(_Inout_ DOCHOSTUIINFO* pInfo);
+
+
+	virtual HRESULT STDMETHODCALLTYPE ShowUI(_In_ DWORD dwID, _In_ IOleInPlaceActiveObject* pActiveObject, _In_ IOleCommandTarget* pCommandTarget, _In_ IOleInPlaceFrame* pFrame, _In_ IOleInPlaceUIWindow* pDoc);
+
+
+	virtual HRESULT STDMETHODCALLTYPE HideUI(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE UpdateUI(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnDocWindowActivate(BOOL fActivate);
+
+
+	virtual HRESULT STDMETHODCALLTYPE OnFrameWindowActivate(BOOL fActivate);
+
+
+	virtual HRESULT STDMETHODCALLTYPE ResizeBorder(_In_ LPCRECT prcBorder, _In_ IOleInPlaceUIWindow* pUIWindow, _In_ BOOL fRameWindow);
+
+
+	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(LPMSG lpMsg, const GUID* pguidCmdGroup, DWORD nCmdID);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetOptionKeyPath(_Out_ LPOLESTR* pchKey, DWORD dw);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetDropTarget(_In_ IDropTarget* pDropTarget, _Outptr_ IDropTarget** ppDropTarget);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetExternal(_Outptr_result_maybenull_ IDispatch** ppDispatch);
+
+
+	virtual HRESULT STDMETHODCALLTYPE TranslateUrl(DWORD dwTranslate, _In_ LPWSTR pchURLIn, _Outptr_ LPWSTR* ppchURLOut);
+
+
+	virtual HRESULT STDMETHODCALLTYPE FilterDataObject(_In_ IDataObject* pDO, _Outptr_result_maybenull_ IDataObject** ppDORet);
+
+
+	virtual HRESULT STDMETHODCALLTYPE DragEnter(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
+
+
+	virtual HRESULT STDMETHODCALLTYPE DragOver(DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
+
+
+	virtual HRESULT STDMETHODCALLTYPE DragLeave(void);
+
+
+	virtual HRESULT STDMETHODCALLTYPE Drop(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
+
+
+	virtual HRESULT STDMETHODCALLTYPE QueryService(_In_ REFGUID guidService, _In_ REFIID riid, _Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+		if (!ppvObject) return E_POINTER;
+		if (guidService == SID_SInternetHostSecurityManager && riid == IID_IInternetSecurityManager) {
+			*ppvObject = static_cast<IInternetSecurityManager*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*ppvObject = NULL;
+		return E_NOINTERFACE;
+	}
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetSecuritySite(__RPC__in_opt IInternetSecurityMgrSite* pSite);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetSecuritySite(__RPC__deref_out_opt IInternetSecurityMgrSite** ppSite);
+
+
+	virtual HRESULT STDMETHODCALLTYPE MapUrlToZone(__RPC__in LPCWSTR pwszUrl, __RPC__out DWORD* pdwZone, DWORD dwFlags);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetSecurityId(_In_ LPCWSTR pwszUrl, _Out_writes_bytes_to_(MAX_SIZE_SECURITY_ID, *pcbSecurityId) BYTE* pbSecurityId, _Inout_ _At_(*pcbSecurityId, _In_range_(>= , MAX_SIZE_SECURITY_ID) _Out_range_(0, MAX_SIZE_SECURITY_ID)) DWORD* pcbSecurityId, _In_ DWORD_PTR dwReserved);
+
+
+	virtual HRESULT STDMETHODCALLTYPE ProcessUrlAction(__RPC__in LPCWSTR pwszUrl, DWORD dwAction, __RPC__out_ecount_full(cbPolicy) BYTE* pPolicy, DWORD cbPolicy, __RPC__in_opt BYTE* pContext, DWORD cbContext, DWORD dwFlags, DWORD dwReserved);
+
+
+	virtual HRESULT STDMETHODCALLTYPE QueryCustomPolicy(__RPC__in LPCWSTR pwszUrl, __RPC__in REFGUID guidKey, __RPC__deref_out_ecount_full_opt(*pcbPolicy) BYTE** ppPolicy, __RPC__out DWORD* pcbPolicy, __RPC__in BYTE* pContext, DWORD cbContext, DWORD dwReserved);
+
+
+	virtual HRESULT STDMETHODCALLTYPE SetZoneMapping(DWORD dwZone, __RPC__in LPCWSTR lpszPattern, DWORD dwFlags);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetZoneMappings(DWORD dwZone, __RPC__deref_out_opt IEnumString** ppenumString, DWORD dwFlags);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo);
+
+
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId);
+
+
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr);
+
 };
 
 // OleSite - the "container" that hosts the IE browser control.
@@ -430,9 +696,11 @@ class OleSite :
 	public IOleContainer,
 	public IDocHostUIHandler,
 	public IDispatch,
-	public IDropTarget
+	public IDropTarget,
+    public IServiceProvider,
+    public IInternetSecurityManager
 {
-	ULONG m_ref = 0; // COM reference count
+	ULONG COM_REFERENCE_COUNTER = 0; // COM reference count
 	HWND m_hwnd = NULL; // The host window we draw into
 	IUnknown* m_pUnkSite = NULL; // IObjectWithSite back-pointer
 	IOleInPlaceObject* m_pInPlace = NULL; // IE's in-place positioning interface
@@ -448,7 +716,7 @@ public:
 	bool dropRegistered = false;
 
 	OleSite() {
-		InterlockedIncrement(&m_ref);
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
 	}
 
 	~OleSite() {
@@ -577,8 +845,8 @@ public:
 		if (*ppv) { AddRef(); return S_OK; }
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 
 	// ---- IOleClientSite ----
 	// These methods let IE ask us about its hosting environment.
@@ -801,10 +1069,10 @@ private:
 		cpc->Release();
 	}
 	class InlineFrame : public IOleInPlaceFrame {
-		ULONG m_ref = 0;
+		ULONG COM_REFERENCE_COUNTER = 0;
 		HWND m_hwnd = NULL;
 	public:
-		InlineFrame(HWND h) : m_hwnd(h) { InterlockedIncrement(&m_ref); }
+		InlineFrame(HWND h) : m_hwnd(h) { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
 		STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
 			if (riid == IID_IUnknown || riid == IID_IOleInPlaceFrame ||
 				riid == IID_IOleWindow || riid == IID_IOleInPlaceUIWindow)
@@ -816,8 +1084,8 @@ private:
 			*ppv = NULL;
 			return E_NOINTERFACE;
 		}
-		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 		STDMETHODIMP GetWindow(HWND* p) override { if (!p) return E_POINTER; *p = m_hwnd; return S_OK; }
 		STDMETHODIMP ContextSensitiveHelp(BOOL) override { return S_OK; }
 		STDMETHODIMP GetBorder(LPRECT) override { return S_OK; }
@@ -832,12 +1100,12 @@ private:
 		STDMETHODIMP TranslateAccelerator(LPMSG, WORD) override { return S_FALSE; }
 	};
 	class InlineEnum : public IEnumUnknown {
-		ULONG m_ref = 0;
+		ULONG COM_REFERENCE_COUNTER = 0;
 		ULONG m_pos = 0;
 		IUnknown* m_ptr = NULL;
 	public:
 		InlineEnum(IUnknown* p) : m_pos(0), m_ptr(p) {
-			InterlockedIncrement(&m_ref);
+			InterlockedIncrement(&COM_REFERENCE_COUNTER);
 			m_ptr->AddRef();
 		}
 		~InlineEnum() { m_ptr->Release(); }
@@ -851,8 +1119,8 @@ private:
 			*ppv = NULL;
 			return E_NOINTERFACE;
 		}
-		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+		STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+		STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 		STDMETHODIMP Next(ULONG celt, IUnknown** p, ULONG* f) override {
 			if (!p) return E_POINTER;
 			ULONG fetched = 0;
@@ -1796,7 +2064,7 @@ struct DispEntry {
 //  	4. IE calls IConnectionPoint::Advise with a sink that maps that DISPID to the JS handler
 //  	5. C++ calls FireEvent(ctrl, dispid) -> iterates sinks -> IE routes to JS handler
 class EventTypeInfo : public ITypeInfo {
-	ULONG m_ref = 0;
+	ULONG COM_REFERENCE_COUNTER = 0;
 	CRITICAL_SECTION m_cs;
 	CLSID m_clsid = {};
 	DISPID m_nextId = INT32_MAX;
@@ -1806,7 +2074,7 @@ class EventTypeInfo : public ITypeInfo {
 	std::map<DISPID, unsigned int> m_id2cParams = {}; // Parameter count per event (for GetFuncDesc)
 public:
 	EventTypeInfo(const CLSID& clsid) : m_clsid(clsid) {
-		InterlockedIncrement(&m_ref);
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
 		InitializeCriticalSection(&m_cs);
 	}
 	~EventTypeInfo() { DeleteCriticalSection(&m_cs); }
@@ -1849,8 +2117,8 @@ public:
 		if (riid == IID_IUnknown || riid == IID_ITypeInfo) { *ppv = this; AddRef(); return S_OK; }
 		*ppv = NULL; return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 
 	// ---- ITypeInfo - the methods IE actually calls for attachEvent ----
 
@@ -1962,12 +2230,12 @@ public:
 // flagged as IMPLTYPEFLAG_FSOURCE | IMPLTYPEFLAG_FDEFAULT.
 // When IE calls GetRefTypeInfo(), we return the EventTypeInfo.
 class CoclassTypeInfo : public ITypeInfo {
-	ULONG m_ref = 0;
+	ULONG COM_REFERENCE_COUNTER = 0;
 	CLSID m_clsid = {};
 	EventTypeInfo* m_eventTI = NULL; // Strong reference (AddRef'd)
 public:
 	CoclassTypeInfo(const CLSID& clsid, EventTypeInfo* eti) : m_clsid(clsid), m_eventTI(eti) {
-		InterlockedIncrement(&m_ref);
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
 		if (m_eventTI) m_eventTI->AddRef();
 	}
 	~CoclassTypeInfo() { if (m_eventTI) m_eventTI->Release(); }
@@ -1976,8 +2244,8 @@ public:
 		if (riid == IID_IUnknown || riid == IID_ITypeInfo) { *ppv = this; AddRef(); return S_OK; }
 		*ppv = NULL; return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 
 	// GetTypeAttr - we're a coclass with 1 impl type (the source event interface)
 	STDMETHODIMP GetTypeAttr(TYPEATTR** pp) override {
@@ -2136,11 +2404,11 @@ class ActiveXControl :
 	public IDropTarget,
 	public IProvideClassInfo2
 {
-	ULONG m_ref = 0;
+	ULONG COM_REFERENCE_COUNTER = 0;
 	ControlInstance_* m_inst = NULL;
 public:
 	ActiveXControl(ControlReg_* reg) {
-		InterlockedIncrement(&m_ref);
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
 		m_inst = new ControlInstance_();
 		m_inst->reg = reg;
 		reg->AddRef();
@@ -2175,8 +2443,8 @@ public:
 		if (*ppv) { AddRef(); return S_OK; }
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 
 	// IOleObject
 	STDMETHODIMP SetClientSite(IOleClientSite* p) override { if (m_inst->clientSite) m_inst->clientSite->Release(); m_inst->clientSite = p; if (p) p->AddRef(); return S_OK; }
@@ -2537,12 +2805,12 @@ inline LRESULT CALLBACK CtrlWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // This object holds a strong reference (AddRef) to the parent ActiveXControl via m_pCPC,
 // ensuring the control stays alive as long as anyone holds this connection point.
 class CtrlConnectionPoint : public IConnectionPoint {
-	ULONG m_ref = 0;
+	ULONG COM_REFERENCE_COUNTER = 0;
 	ControlInstance_* m_inst = NULL;
 	IConnectionPointContainer* m_pCPC = NULL;
 public:
 	CtrlConnectionPoint(ControlInstance_* inst, IConnectionPointContainer* pCPC) : m_inst(inst), m_pCPC(pCPC) {
-		InterlockedIncrement(&m_ref);
+		InterlockedIncrement(&COM_REFERENCE_COUNTER);
 		if (m_pCPC) m_pCPC->AddRef();
 	}
 	~CtrlConnectionPoint() { if (m_pCPC) m_pCPC->Release(); }
@@ -2554,8 +2822,8 @@ public:
 		*ppv = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 	STDMETHODIMP GetConnectionInterface(IID* p) override {
 		if (!p) return E_POINTER;
 		*p = IID_IDispatch;
@@ -2602,10 +2870,10 @@ inline STDMETHODIMP ActiveXControl::FindConnectionPoint(REFIID riid, IConnection
 // and calls CreateInstance() on it. We create a new ActiveXControl and return it.
 // This is a pure in-memory registration - no registry entries are written.
 class CtrlClassFactory : public IClassFactory {
-	ULONG m_ref = 0;
+	ULONG COM_REFERENCE_COUNTER = 0;
 	ControlReg_* m_reg = NULL;
 public:
-	CtrlClassFactory(ControlReg_* r) : m_reg(r) { InterlockedIncrement(&m_ref); }
+	CtrlClassFactory(ControlReg_* r) : m_reg(r) { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
 	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
 		if (riid == IID_IUnknown || riid == IID_IClassFactory) {
 			*ppv = this; AddRef();
@@ -2614,8 +2882,8 @@ public:
 		*ppv = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!r) delete this; return r; }
 	STDMETHODIMP CreateInstance(IUnknown* pOuter, REFIID riid, void** ppv) override {
 		if (pOuter) return CLASS_E_NOAGGREGATION;
 		ActiveXControl* c = new ActiveXControl(m_reg);
@@ -2626,7 +2894,12 @@ public:
 	STDMETHODIMP LockServer(BOOL) override { return S_OK; }
 };
 
-class TridentDataObject : public IDataObject {
+using DataProvider = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+using DataHandler = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+static constexpr DWORD TYMED_MASK = 0x7FFFFFFF;
+static constexpr DWORD TYMED_HERE = 0x80000000;
+class TridentUniversalDataTransferProtocol : public IDataObject {
+	ULONG COM_REFERENCE_COUNTER = 0;
 	struct ProviderEntry {
 		CLIPFORMAT cfFormat;
 		DWORD tymedMask;
@@ -2637,159 +2910,115 @@ class TridentDataObject : public IDataObject {
 		DWORD tymedMask;
 		DataHandler handler;
 	};
-	ULONG m_ref = 0;
-	std::vector<ProviderEntry> m_providers = {};
-	std::vector<HandlerEntry> m_handlers = {};
+	std::vector<ProviderEntry> ProvidersLookup = {};
+	std::vector<HandlerEntry> HandlersLookup = {};
 public:
-	TridentDataObject() { InterlockedIncrement(&m_ref); }
-
-	STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
-		if (!ppv) return E_POINTER;
+	TridentUniversalDataTransferProtocol() { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+		if (!ppvObject) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IDataObject) {
-			*ppv = static_cast<IDataObject*>(this);
+			*ppvObject = static_cast<IDataObject*>(this);
 			AddRef();
 			return S_OK;
 		}
-		*ppv = NULL;
+		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	STDMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&m_ref); }
-	STDMETHODIMP_(ULONG) Release() override { ULONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
-
-	inline void RegisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask, DataProvider provider) {
-		m_providers.push_back({ cfFormat, tymedMask, std::move(provider) });
-	}
-
-	inline void UnregisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask) {
-		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) {
-				m_providers.erase(it);
-				return;
-			}
-		}
-	}
-
-	inline bool HasProvider(CLIPFORMAT cfFormat, DWORD tymedMask) const {
-		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) return true;
-		}
-		return false;
-	}
-
-	inline void RegisterHandler(CLIPFORMAT cfFormat, DWORD tymedMask, DataHandler handler) {
-		m_handlers.push_back({ cfFormat, tymedMask, std::move(handler) });
-	}
-
-	inline void UnregisterHandler(CLIPFORMAT cfFormat, DWORD tymedMask) {
-		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
-			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) {
-				m_handlers.erase(it);
-				return;
-			}
-		}
-	}
-
-	inline bool HasHandler(CLIPFORMAT cfFormat, DWORD tymedMask) const {
-		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
-			if (it->cfFormat == cfFormat && it->tymedMask == tymedMask) return true;
-		}
-		return false;
-	}
-
-	// GetData - "give me the data for this format, you pick the medium"
-	STDMETHODIMP GetData(FORMATETC* pfmt, STGMEDIUM* pmed) override {
-		if (!pfmt || !pmed) return E_POINTER;
-		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-			if (it->cfFormat != pfmt->cfFormat) continue;
-			if (it->tymedMask & TYMED_HERE) continue; // filter out 'here' entries
-			const DWORD common = (it->tymedMask & TYMED_MASK) & (pfmt->tymed & TYMED_MASK);
-			if (!common) continue;
-			ZeroMemory(pmed, sizeof(STGMEDIUM));
-			return it->provider(pfmt->cfFormat, common, pfmt->lindex, pfmt->dwAspect, pmed);
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	// GetData - "Give me the data for this format, you pick the medium."
+	virtual HRESULT STDMETHODCALLTYPE GetData(_In_ FORMATETC* pformatetcIn, _Out_ STGMEDIUM* pmedium) {
+		if (!pformatetcIn || !pmedium) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetcIn->cfFormat) continue;
+			if (Item->tymedMask & TYMED_HERE) continue; // filter out 'here' entries
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pformatetcIn->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
+			ZeroMemory(pmedium, sizeof(STGMEDIUM));
+			return Item->provider(pformatetcIn->cfFormat, CommonTymed, pformatetcIn->lindex, pformatetcIn->dwAspect, pmedium);
 		}
 		return DV_E_FORMATETC;
 	}
-
-	// GetDataHere - "write the data INTO the medium I've already allocated"
-	STDMETHODIMP GetDataHere(FORMATETC* pfmt, STGMEDIUM* pmed) override {
-		if (!pfmt || !pmed) return E_POINTER;
-		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-			if (it->cfFormat != pfmt->cfFormat) continue;
-			if (!(it->tymedMask & TYMED_HERE)) continue; // only 'here' entries
-			const DWORD common = (it->tymedMask & TYMED_MASK) & (pmed->tymed & TYMED_MASK);
-			if (!common) continue;
+	// GetDataHere - "I already allocated the medium, write into it."
+	virtual HRESULT STDMETHODCALLTYPE GetDataHere(_In_ FORMATETC* pformatetc, _Inout_ STGMEDIUM* pmedium) {
+		if (!pformatetc || !pmedium) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			if (!(Item->tymedMask & TYMED_HERE)) continue; // only 'here' entries
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
 			// No ZeroMemory!
-			return it->provider(pfmt->cfFormat, common | TYMED_HERE, pfmt->lindex, pfmt->dwAspect, pmed);
+			return Item->provider(pformatetc->cfFormat, CommonTymed | TYMED_HERE, pformatetc->lindex, pformatetc->dwAspect, pmedium);
 		}
 		return DV_E_FORMATETC;
 	}
-
-	// QueryGetData - "do you support this format at all?"
-	STDMETHODIMP QueryGetData(FORMATETC* pfmt) override {
-		if (!pfmt) return E_POINTER;
-		for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-			if (it->cfFormat != pfmt->cfFormat) continue;
-			if ((it->tymedMask & TYMED_MASK) & (pfmt->tymed & TYMED_MASK)) return S_OK;
+	// QueryGetData - "Do you support this format at all?"
+	virtual HRESULT STDMETHODCALLTYPE QueryGetData(__RPC__in_opt FORMATETC* pformatetc) {
+		if (!pformatetc) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			if ((Item->tymedMask & TYMED_MASK) & (pformatetc->tymed & TYMED_MASK)) return S_OK;
 		}
 		return DV_E_FORMATETC;
 	}
-
-	// GetCanonicalFormatEtc - "do different target devices produce different data for this format?"
-	STDMETHODIMP GetCanonicalFormatEtc(FORMATETC*, FORMATETC* pfmtOut) override {
+	// GetCanonicalFormatEtc - "Do different target devices produce different data for this format?"
+	virtual HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(__RPC__in_opt FORMATETC* pformatectIn, __RPC__out FORMATETC* pformatetcOut) {
 		// Always answer "no difference"
-		if (pfmtOut) pfmtOut->ptd = NULL;
+		if (pformatetcOut) pformatetcOut->ptd = NULL;
 		return DATA_S_SAMEFORMATETC;
 	}
-
-	// SetData - "here is some data, do what you want with it"
-	STDMETHODIMP SetData(FORMATETC* pfmt, STGMEDIUM* pmed, BOOL fRelease) override {
-		if (!pfmt || !pmed) return E_POINTER;
-		for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
-			if (it->cfFormat != pfmt->cfFormat) continue;
-			const DWORD common = (it->tymedMask & TYMED_MASK) & (pmed->tymed & TYMED_MASK);
-			if (!common) continue;
-			HRESULT hr = it->handler(pfmt->cfFormat, common, pfmt->lindex, pfmt->dwAspect, pmed);
-			if (fRelease) ReleaseStgMedium(pmed);
-			return hr;
+	// SetData - the reverse direction: "Here is some data, do what you want with it."
+	virtual HRESULT STDMETHODCALLTYPE SetData(_In_ FORMATETC* pformatetc, _In_ STGMEDIUM* pmedium, BOOL fRelease) {
+		if (!pformatetc || !pmedium) return E_POINTER;
+		for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
+			HRESULT Result = Item->handler(pformatetc->cfFormat, CommonTymed, pformatetc->lindex, pformatetc->dwAspect, pmedium);
+			if (fRelease) ReleaseStgMedium(pmedium);
+			return Result;
 		}
 		return DV_E_FORMATETC;
 	}
-
-	// EnumFormatEtc - "list all formats you can produce / accept"
-	STDMETHODIMP EnumFormatEtc(DWORD dwDirection, IEnumFORMATETC** ppEnum) override {
-		if (!ppEnum) return E_POINTER;
-		*ppEnum = NULL;
-		std::vector<FORMATETC> items;
+	// EnumFormatEtc - "list every format you can produce or accept."
+	virtual HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD dwDirection, __RPC__deref_out_opt IEnumFORMATETC** ppenumFormatEtc) {
+		if (!ppenumFormatEtc) return E_POINTER;
+		*ppenumFormatEtc = NULL;
+		std::vector<FORMATETC> Items = {};
 		if (dwDirection == DATADIR_GET) {
-			items.reserve(m_providers.size());
-			for (auto it = m_providers.begin(); it != m_providers.end(); ++it) {
-				items.push_back({ it->cfFormat, NULL, DVASPECT_CONTENT, -1, it->tymedMask & TYMED_MASK });
+			Items.reserve(ProvidersLookup.size());
+			for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+				// Strip the TYMED_HERE marker bit, the enumerator only reports real tymed values to outsiders.
+				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
 			}
 		}
 		else if (dwDirection == DATADIR_SET) {
-			items.reserve(m_handlers.size());
-			for (auto it = m_handlers.begin(); it != m_handlers.end(); ++it) {
-				items.push_back({ it->cfFormat, NULL, DVASPECT_CONTENT, -1, it->tymedMask & TYMED_MASK });
+			Items.reserve(HandlersLookup.size());
+			for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
+				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
 			}
 		}
 		else {
 			return E_INVALIDARG;
 		}
-		// SHCreateStdEnumFmtEtc copies the FORMATETC array internally, so
-		// we can let `items` go out of scope and be destroyed immediately.
-		// The shell-provided enumerator owns its own copy.
-		return SHCreateStdEnumFmtEtc((UINT)items.size(), items.data(), ppEnum);
+		return SHCreateStdEnumFmtEtc((UINT)Items.size(), Items.data(), ppenumFormatEtc);
 	}
-
 	// DAdvise / DUnadvise / EnumDAdvise - Completely unrelated to OLE Dnd & OLE Clipboard.
-	STDMETHODIMP DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) override {
-		return OLE_E_ADVISENOTSUPPORTED;
+	virtual HRESULT STDMETHODCALLTYPE DAdvise(__RPC__in FORMATETC* pformatetc, DWORD advf, __RPC__in_opt IAdviseSink* pAdvSink, __RPC__out DWORD* pdwConnection) { return OLE_E_ADVISENOTSUPPORTED; }
+	virtual HRESULT STDMETHODCALLTYPE DUnadvise(DWORD dwConnection) { return OLE_E_ADVISENOTSUPPORTED; }
+	virtual HRESULT STDMETHODCALLTYPE EnumDAdvise(__RPC__deref_out_opt IEnumSTATDATA** ppenumAdvise) { return OLE_E_ADVISENOTSUPPORTED; }
+	void RegisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask, DataProvider provider) {
+		ProvidersLookup.push_back({ cfFormat, tymedMask, std::move(provider) });
 	}
-	STDMETHODIMP DUnadvise(DWORD) override {
-		return OLE_E_ADVISENOTSUPPORTED;
-	}
-	STDMETHODIMP EnumDAdvise(IEnumSTATDATA**) override {
-		return OLE_E_ADVISENOTSUPPORTED;
+	void UnregisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask) {
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end();) {
+			if (Item->cfFormat == cfFormat && Item->tymedMask == tymedMask) {
+				Item = ProvidersLookup.erase(Item);
+			}
+			else {
+				Item++;
+			}
+		}
 	}
 };
 
