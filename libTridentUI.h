@@ -418,7 +418,6 @@ public:
 	}
 	virtual ULONG STDMETHODCALLTYPE AddRef(void) override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); };
 	virtual ULONG STDMETHODCALLTYPE Release(void) override { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
-	// IOleClientSite implementations
 	virtual HRESULT STDMETHODCALLTYPE SaveObject(void) override { return E_NOTIMPL; }
 	virtual HRESULT STDMETHODCALLTYPE GetMoniker(DWORD dwAssign, DWORD dwWhichMoniker, __RPC__deref_out_opt IMoniker** ppmk) override {
 		if (ppmk) *ppmk = NULL;
@@ -477,44 +476,46 @@ public:
 	virtual HRESULT STDMETHODCALLTYPE RequestBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths) override { return INPLACE_E_NOTOOLSPACE; }
 	virtual HRESULT STDMETHODCALLTYPE SetBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths) override { if (!pborderwidths) return S_OK; return INPLACE_E_NOTOOLSPACE; }
 	virtual HRESULT STDMETHODCALLTYPE SetActiveObject(__RPC__in_opt IOleInPlaceActiveObject* pActiveObject, __RPC__in_opt_string LPCOLESTR pszObjName) override { return S_OK; }
-	virtual HRESULT STDMETHODCALLTYPE ShowContextMenu(_In_ DWORD dwID, _In_ POINT* ppt, _In_ IUnknown* pcmdtReserved, _In_ IDispatch* pdispReserved) override;
-	virtual HRESULT STDMETHODCALLTYPE GetHostInfo(_Inout_ DOCHOSTUIINFO* pInfo) override;
-	virtual HRESULT STDMETHODCALLTYPE ShowUI(_In_ DWORD dwID, _In_ IOleInPlaceActiveObject* pActiveObject, _In_ IOleCommandTarget* pCommandTarget, _In_ IOleInPlaceFrame* pFrame, _In_ IOleInPlaceUIWindow* pDoc) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE HideUI(void) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE UpdateUI(void) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE OnDocWindowActivate(BOOL fActivate) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE OnFrameWindowActivate(BOOL fActivate) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE ResizeBorder(_In_ LPCRECT prcBorder, _In_ IOleInPlaceUIWindow* pUIWindow, _In_ BOOL fRameWindow) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(LPMSG lpMsg, const GUID* pguidCmdGroup, DWORD nCmdID) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetOptionKeyPath(_Out_ LPOLESTR* pchKey, DWORD dw) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetDropTarget(_In_ IDropTarget* pDropTarget, _Outptr_ IDropTarget** ppDropTarget) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetExternal(_Outptr_result_maybenull_ IDispatch** ppDispatch) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE TranslateUrl(DWORD dwTranslate, _In_ LPWSTR pchURLIn, _Outptr_ LPWSTR* ppchURLOut) override;
-
-
-	virtual HRESULT STDMETHODCALLTYPE FilterDataObject(_In_ IDataObject* pDO, _Outptr_result_maybenull_ IDataObject** ppDORet) override;
-
-
+	// If you want to block IE's default context menu, change this to S_OK.
+	virtual HRESULT STDMETHODCALLTYPE ShowContextMenu(_In_ DWORD dwID, _In_ POINT* ppt, _In_ IUnknown* pcmdtReserved, _In_ IDispatch* pdispReserved) override { return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE GetHostInfo(_Inout_ DOCHOSTUIINFO* pInfo) override {
+		if (!pInfo) return E_POINTER;
+		pInfo->cbSize = sizeof(DOCHOSTUIINFO);
+		// Note: NO3DBORDER deliberately NOT set—we keep IE's default sunken 3D border.
+		// Note: NO_OPEN_NEW_WINDOW deliberately NOT set—we want NewWindow3 events
+		//       to fire so we can intercept and redirect to our own windows.
+		pInfo->dwFlags = DOCHOSTUIFLAG_DPI_AWARE | DOCHOSTUIFLAG_THEME;
+		pInfo->dwDoubleClick = DOCHOSTUIDBLCLK_DEFAULT;
+		pInfo->pchHostCss = NULL;
+		pInfo->pchHostNS = NULL;
+		return S_OK;
+	}
+	virtual HRESULT STDMETHODCALLTYPE ShowUI(_In_ DWORD dwID, _In_ IOleInPlaceActiveObject* pActiveObject, _In_ IOleCommandTarget* pCommandTarget, _In_ IOleInPlaceFrame* pFrame, _In_ IOleInPlaceUIWindow* pDoc) override { return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE HideUI(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE UpdateUI(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnDocWindowActivate(BOOL fActivate) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnFrameWindowActivate(BOOL fActivate) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE ResizeBorder(_In_ LPCRECT prcBorder, _In_ IOleInPlaceUIWindow* pUIWindow, _In_ BOOL fRameWindow) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(LPMSG lpMsg, const GUID* pguidCmdGroup, DWORD nCmdID) override { return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE GetOptionKeyPath(_Out_ LPOLESTR* pchKey, DWORD dw) override { if (pchKey) *pchKey = NULL; return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE GetDropTarget(_In_ IDropTarget* pDropTarget, _Outptr_ IDropTarget** ppDropTarget) override {
+		if (!ppDropTarget) return E_POINTER;
+		*ppDropTarget = static_cast<IDropTarget*>(this);
+		AddRef();
+		return S_OK;
+	}
+	virtual HRESULT STDMETHODCALLTYPE GetExternal(_Outptr_result_maybenull_ IDispatch** ppDispatch) override {
+		if (!ppDispatch) return E_POINTER;
+		if (!ExtDisp) {
+			*ppDispatch = NULL;
+			return S_FALSE;
+		}
+		*ppDispatch = static_cast<IDispatch*>(ExtDisp);
+		ExtDisp->AddRef();
+		return S_OK;
+	}
+	virtual HRESULT STDMETHODCALLTYPE TranslateUrl(DWORD dwTranslate, _In_ LPWSTR pchURLIn, _Outptr_ LPWSTR* ppchURLOut) override { if (ppchURLOut) *ppchURLOut = NULL; return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE FilterDataObject(_In_ IDataObject* pDO, _Outptr_result_maybenull_ IDataObject** ppDORet) override { if (ppDORet) *ppDORet = NULL; return S_FALSE; }
 	virtual HRESULT STDMETHODCALLTYPE DragEnter(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect) override;
 
 
