@@ -1,56 +1,16 @@
 #pragma once
-/*
-libTridentUI - v0.4.3
-An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
-Works perfectly on Microsoft Windows XP SP3!
-Made possible by:
-Happy_mimimix
-Claude Opus 4.6
-ChatGPT 5.2 Thinking
-Gemini Pro
-
-Thread safety notice:
-All UI calls must be made from the same STA thread that called TridentInit().
-This is a COM/OLE requirement, not a library limitation.
-*/
-
-/*
-HOW THIS WORKS (the 30-second version):
-Every Windows machine since Windows 95 has an HTML rendering engine built in: mshtml.dll (aka "Trident",
-the engine behind Internet Explorer). This library creates a Win32 window and stuffs an instance
-of that engine inside it, like putting a browser tab into your app.
-
-The trick is that IE's engine is an "ActiveX control" - a type of COM object that can be embedded
-inside another window. To host it, we need to implement a bunch of COM interfaces that the control
-calls back into. Think of it like a plugin system: our app is the host, mshtml is the plugin.
-The plugin says "I need a window to draw in" and we respond with our HWND. It says "give me a
-frame for my toolbar" and we give it a dummy one. And so on, for 19 different interfaces (8 in OleSite, 11 in ActiveXControl).
-
-The key interfaces WE implement (as the "container" / "host"):
-	IOleClientSite		- "I'm the app hosting you, here's how to talk to me"
-	IOleInPlaceSiteEx	- "Here's the window you can draw in"
-	IOleControlSite		- "I can handle your keyboard accelerators"
-	IDocHostUIHandler	- "I control the right-click menu, scrollbars, etc."
-	IDispatch			- "I handle navigation events (like page load complete)"
-	IOleContainer		- "I can enumerate the objects I'm hosting"
-
-The key interfaces IE GIVES US (that we call into):
-	IWebBrowser2		- "Navigate to URLs, get the document, etc."
-	IOleObject			- "Activate me, close me, get my status"
-	IOleInPlaceObject	- "Here's how to resize and position me"
-	IHTMLDocument2/3	- "Here's the DOM of the loaded page"
-
-The JS <-> C++ bridge works through "window.external":
-	When JavaScript calls window.external.MyFunc(1, 2), IE looks up our IDocHostUIHandler,
-	calls GetExternal() to get an IDispatch, calls GetIDsOfNames("MyFunc") to get a numeric ID,
-	then calls Invoke(id, args) which runs our C++ callback.
-
-The ActiveX control creation works the other way around:
-	We register a class factory in memory (no registry), so when IE encounters
-	<object classid="clsid:...">, it calls our factory, which creates a COM object that
-	implements IOleObject/IDispatch/etc. IE embeds it the same way apps embed IE itself.
-*/
-
+// libTridentUI - v1.0.0 beta
+// An extremely lightweight Chrome Embedded Framework alternative for legacy operating systems.
+// Works perfectly on Microsoft Windows XP SP3!
+// Made possible by:
+// Happy_mimimix
+// Claude Opus 4.6
+// ChatGPT 5.2 Thinking
+// Gemini Pro
+// 
+// Thread safety notice:
+// All UI calls must be made from the same STA thread that called TridentInit().
+// This is a COM/OLE requirement, not a library limitation.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <windowsx.h>
@@ -74,168 +34,19 @@ The ActiveX control creation works the other way around:
 #include <vector>
 #include <algorithm>
 #include <intrin.h>
-#define LONG_MAX_PATH 0x0FFF
-
 #pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "oleaut32.lib")
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
-
-// Public APIs
-struct TridentWindowData_;
-typedef TridentWindowData_* hTrident;
-typedef IHTMLElement* hElement;
-typedef IHTMLDocument2* hDocument;
-typedef IHTMLDocument3* hDocument2;
-struct ControlInstance_;
-typedef ControlInstance_* hControl;
-struct ControlReg_;
-typedef ControlReg_* hControlClass;
-enum InsertLocation { BEFORE_BEGIN, AFTER_BEGIN, BEFORE_END, AFTER_END };
-
-// Callback signatures - both receive raw DISPPARAMS* (COM's reverse-ordered argument array).
-// 
-// DISPPARAMS argument convention:
-// 
-// COM passes function arguments in REVERSE order in DISPPARAMS::rgvarg:
-//  	rgvarg[cArgs-1] = first argument
-//  	rgvarg[cArgs-2] = second argument
-//  	rgvarg[0]       = last argument
-// 
-// This is the same convention in BOTH directions:
-//  	JS -> C++ (method calls): rgvarg is reverse-ordered, your callback reads them
-//  	C++ -> JS (FireEvent): you pass args in reverse order, JS receives them correctly
-// 
-// Example - JS calls window.external.Add(10, 20):
-//  	dp->cArgs = 2
-//  	dp->rgvarg[0].lVal = 20  (last arg)
-//  	dp->rgvarg[1].lVal = 10  (first arg)
-// 
-// Example - C++ fires event with args (42, "hello"):
-//  	VARIANT args[2];
-//  	args[0].vt = VT_BSTR; args[0].bstrVal = SysAllocString(L"hello"); // last arg first
-//  	args[1].vt = VT_I4; args[1].lVal = 42; // first arg last
-//  	FireEvent(c, evtId, args);
-
-using ControlMethodCallback = std::function<HRESULT(hControl, DISPPARAMS*, VARIANT*)>;
-
-typedef LRESULT(*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
-typedef LRESULT(*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
-typedef HRESULT(*PropertyGetter)(hControl c, VARIANT* result);
-typedef HRESULT(*PropertySetter)(hControl c, VARIANT value);
-typedef HRESULT(*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT(*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT(*DropLeaveCallback)(hControl c);
-typedef HRESULT(*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT(*DropEnterCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT(*DropOverCallback_host)(hTrident h, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-typedef HRESULT(*DropLeaveCallback_host)(hTrident h);
-typedef HRESULT(*DropCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
-
-inline void TridentInit();
-inline void TridentShutdown();
-inline bool IsTridentHostWindow(HWND hwnd);
-inline hTrident FindNearestTridentHostFromHWND(HWND hwnd);
-inline void TridentRunMessageLoop();
-inline void TridentProcessMessage(MSG& msg, bool* is_eaten);
-inline hTrident NewTridentWindow(const wchar_t* title, int x, int y, int w, int h, HWND owner = NULL, DWORD style = WS_OVERLAPPEDWINDOW, DWORD styleEX = NULL);
-inline void CloseTridentWindow(hTrident h);
-inline HWND GetTridentHWND(hTrident h);
-inline IWebBrowser2* GetTridentBrowser(hTrident h);
-inline void BindFunction(hTrident h, const wchar_t* name, MethodCallback cb);
-inline void UnbindFunction(hTrident h, const wchar_t* name);
-inline void SetWndProc(hTrident h, TridentWndProc proc);
-inline void SetUserData(hTrident h, void* data);
-inline void* GetUserData(hTrident h);
-inline void NavigateTo(hTrident h, const wchar_t* url);
-inline void NavigateToRes(hTrident h, const wchar_t* resName);
-inline void NavigateToHTML(hTrident h, const wchar_t* html);
-inline hDocument GetDocument(hTrident h);
-inline hDocument2 GetDocument2(hDocument h);
-
-inline VARIANT EvaluateExpression(hTrident h, const wchar_t* expr);
-inline VARIANT InvokeGlobalFunction(hTrident h, const wchar_t* jsfunc, VARIANT* args = NULL, unsigned int argc = 0);
-inline VARIANT InvokeFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen, VARIANT* args = NULL, unsigned int argc = 0);
-inline void ExecuteScript(hTrident h, const wchar_t* jscript);
-inline HRESULT GetIDsOfNamesEx(IDispatch* disp, BSTR name, DISPID* dispid, bool create = false);
-inline VARIANT DispatchGetNamedProperty(IDispatch* disp, const wchar_t* name);
-inline void DispatchSetNamedProperty(IDispatch* disp, const wchar_t* name, const VARIANT* value);
-inline VARIANT CreateObject(hTrident h, const wchar_t* classname, VARIANT* args = NULL, unsigned int argc = 0);
-inline VARIANT CreateEmptyArray(hTrident h);
-inline VARIANT CreateEmptyObject(hTrident h);
-inline VARIANT GetDispatchIndex(VARIANT* arr, unsigned int index);
-inline void SetDispatchIndex(VARIANT* arr, unsigned int index, const VARIANT* value);
-inline VARIANT GetDispatchSize(VARIANT* arr);
-inline void DispatchResize(VARIANT* arr, unsigned int newsize);
-inline VARIANT GetDispatchProperty(VARIANT* obj, const wchar_t* prop);
-inline void SetDispatchProperty(VARIANT* obj, const wchar_t* prop, const VARIANT* value);
-inline VARIANT CallDispatchFunction(VARIANT* func, VARIANT* args = NULL, unsigned int argc = 0);
-inline VARIANT GetGlobalFunction(hTrident h, const wchar_t* funcName);
-inline VARIANT GetExternalFunction(hTrident h, const wchar_t* funcName);
-inline VARIANT GetFunctionByPath(hTrident h, wchar_t** path, unsigned int pathlen);
-inline VARIANT CreateFunction(hTrident h, wchar_t** args, unsigned int argc, const wchar_t* impl);
-
-inline hElement GetElement(hTrident h, const wchar_t* id);
-inline void SetHTML(hElement e, const wchar_t* html);
-inline std::wstring GetHTML(hElement e);
-inline void SetText(hElement e, const wchar_t* text);
-inline std::wstring GetText(hElement e);
-inline void SetOuterHTML(hElement e, const wchar_t* html);
-inline void SetClass(hElement e, const wchar_t* cls);
-inline void SetStyle(hElement e, const wchar_t* css);
-inline void SetAttr(hElement e, const wchar_t* name, const wchar_t* val);
-inline std::wstring GetAttr(hElement e, const wchar_t* name);
-inline void SetElementHTML(hTrident h, const wchar_t* id, const wchar_t* html);
-inline std::wstring GetElementHTML(hTrident h, const wchar_t* id);
-inline void SetElementText(hTrident h, const wchar_t* id, const wchar_t* text);
-inline std::wstring GetElementText(hTrident h, const wchar_t* id);
-inline void InsertHTML(hTrident h, const wchar_t* id, InsertLocation where, const wchar_t* html);
-inline void InsertHTMLAtBody(hTrident h, InsertLocation where, const wchar_t* html);
-inline void RemoveElement(hTrident h, const wchar_t* id);
-
-
-
-inline CLSID CLSIDFromName(const wchar_t* name);
-inline std::wstring CLSIDToString(const CLSID& clsid);
-inline std::wstring GetControlClassId(hControlClass reg);
-inline CLSID GetControlCLSID(hControlClass reg);
-inline hControlClass RegisterControl(const wchar_t* name, ControlWndProc proc, void* userData = NULL, DWORD style = NULL);
-inline void UnregisterControl(hControlClass reg);
-inline HWND GetControlHWND(hControl c);
-inline void* GetControlUserData(hControl c);
-inline void SetControlUserData(hControl c, void* data);
-inline void InvalidateControl(hControl c);
-inline hControlClass GetControlClass(hControl c);
-inline void BindClassMethod(hControlClass reg, const wchar_t* name, ControlMethodCallback cb);
-inline void BindClassProperty(hControlClass reg, const wchar_t* name, PropertyGetter getter, PropertySetter setter);
-inline void UnbindClassMethod(hControlClass reg, const wchar_t* name);
-inline void UnbindClassProperty(hControlClass reg, const wchar_t* name);
-inline DISPID RegisterEvent(hControlClass reg, const wchar_t* name, unsigned int paramCount = 0);
-inline unsigned int GetEventExpectedArgc(hControlClass reg, DISPID eventId);
-inline unsigned int GetEventExpectedArgcByName(hControlClass reg, const wchar_t* name);
-inline void FireEvent(hControl c, DISPID eventId, VARIANT* args = NULL);
-inline void FireEventByName(hControl c, const wchar_t* name, VARIANT* args = NULL);
-inline hTrident FindHostFromControl(hControl c);
-inline void EnableDragDrop(hControl c, DropCallback onDrop, DropEnterCallback onDragEnter = NULL, DropOverCallback onDragOver = NULL, DropLeaveCallback onDragLeave = NULL);
-inline void DisableDragDrop(hControl c);
-inline void EnableDragDrop_host(hTrident h, DropCallback_host onDrop, DropEnterCallback_host onDragEnter = NULL, DropOverCallback_host onDragOver = NULL, DropLeaveCallback_host onDragLeave = NULL);
-inline void DisableDragDrop_host(hTrident h);
-inline HRESULT StartDragDrop(hControl c, IDataObject* data, DWORD allowedEffects = DROPEFFECT_COPY);
-
-// COM implementations
-inline const wchar_t* g_trident_wndclass = L"libTridentUI";
-inline TridentWindowData_* g_trident_head = NULL;
-
 using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
-
 // MethodDispatch - Provides JS a callable function pointer, used in GetExternalFunction().
 class MethodDispatch : public IDispatch {
 	ULONG COM_REFERENCE_COUNTER = 0;
 	MethodCallback TargetFunction;
 public:
 	MethodDispatch(MethodCallback Function) : TargetFunction(Function) { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
-	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) override {
 		if (!ppvObject) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IDispatch) {
 			*ppvObject = static_cast<IDispatch*>(this);
@@ -245,11 +56,11 @@ public:
 		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
-	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) { return E_NOTIMPL; }
-	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) {
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) override { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) override { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) override {
 		HRESULT Result = S_OK;
 		for (UINT Name = 0; Name < cNames; Name++) {
 			if (!rgszNames[Name] || !rgszNames[Name][0]) {
@@ -262,7 +73,7 @@ public:
 		}
 		return Result;
 	}
-	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) {
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) override {
 		if (dispIdMember != DISPID_VALUE) return DISP_E_MEMBERNOTFOUND;
 		if (wFlags & DISPATCH_METHOD) {
 			if (pVarResult) VariantInit(pVarResult);
@@ -271,7 +82,6 @@ public:
 		return DISP_E_MEMBERNOTFOUND;
 	}
 };
-
 // ExternalDispatch - this is what JavaScript sees as "window.external"
 // 
 // When JS calls window.external.Add(1, 2), here's what happens behind the scenes:
@@ -294,7 +104,8 @@ class ExternalDispatch : public IDispatch {
 	std::map<DISPID, MethodCallback> MapIDToFuncPtr = {};
 public:
 	ExternalDispatch() {InterlockedIncrement(&COM_REFERENCE_COUNTER);}
-	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) override {
+		if (!ppvObject) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IDispatch) {
 			*ppvObject = static_cast<IDispatch*>(this);
 			AddRef();
@@ -303,11 +114,11 @@ public:
 		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
-	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) { return E_NOTIMPL; }
-	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) {
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) override { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) override { if (!pctinfo) return E_POINTER; *pctinfo = 0; return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) override {
 		HRESULT Result = S_OK;
 		for (UINT Name = 0; Name < cNames; Name++) {
 			auto Found = MapNameToID.find(rgszNames[Name]);
@@ -321,7 +132,7 @@ public:
 		}
 		return Result;
 	}
-	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) {
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) override {
 		auto Found = MapIDToFuncPtr.find(dispIdMember);
 		if (Found == MapIDToFuncPtr.end()) {
 			return DISP_E_MEMBERNOTFOUND;
@@ -393,7 +204,135 @@ public:
 		}
 	}
 };
-
+// TridentUniversalDataTransferProtocol
+using DataProvider = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+using DataHandler = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
+static constexpr DWORD TYMED_MASK = 0x7FFFFFFF;
+static constexpr DWORD TYMED_HERE = 0x80000000;
+class TridentUniversalDataTransferProtocol : public IDataObject {
+	ULONG COM_REFERENCE_COUNTER = 0;
+	struct ProviderEntry {
+		CLIPFORMAT cfFormat;
+		DWORD tymedMask;
+		DataProvider provider;
+	};
+	struct HandlerEntry {
+		CLIPFORMAT cfFormat;
+		DWORD tymedMask;
+		DataHandler handler;
+	};
+	std::vector<ProviderEntry> ProvidersLookup = {};
+	std::vector<HandlerEntry> HandlersLookup = {};
+public:
+	TridentUniversalDataTransferProtocol() { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) override {
+		if (!ppvObject) return E_POINTER;
+		if (riid == IID_IUnknown || riid == IID_IDataObject) {
+			*ppvObject = static_cast<IDataObject*>(this);
+			AddRef();
+			return S_OK;
+		}
+		*ppvObject = NULL;
+		return E_NOINTERFACE;
+	}
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
+	virtual ULONG STDMETHODCALLTYPE Release(void) override { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	// GetData - "Give me the data for this format, you pick the medium."
+	virtual HRESULT STDMETHODCALLTYPE GetData(_In_ FORMATETC* pformatetcIn, _Out_ STGMEDIUM* pmedium) override {
+		if (!pformatetcIn || !pmedium) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetcIn->cfFormat) continue;
+			if (Item->tymedMask & TYMED_HERE) continue; // filter out 'here' entries
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pformatetcIn->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
+			ZeroMemory(pmedium, sizeof(STGMEDIUM));
+			return Item->provider(pformatetcIn->cfFormat, CommonTymed, pformatetcIn->lindex, pformatetcIn->dwAspect, pmedium);
+		}
+		return DV_E_FORMATETC;
+	}
+	// GetDataHere - "I already allocated the medium, write into it."
+	virtual HRESULT STDMETHODCALLTYPE GetDataHere(_In_ FORMATETC* pformatetc, _Inout_ STGMEDIUM* pmedium) override {
+		if (!pformatetc || !pmedium) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			if (!(Item->tymedMask & TYMED_HERE)) continue; // only 'here' entries
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
+			// No ZeroMemory!
+			return Item->provider(pformatetc->cfFormat, CommonTymed | TYMED_HERE, pformatetc->lindex, pformatetc->dwAspect, pmedium);
+		}
+		return DV_E_FORMATETC;
+	}
+	// QueryGetData - "Do you support this format at all?"
+	virtual HRESULT STDMETHODCALLTYPE QueryGetData(__RPC__in_opt FORMATETC* pformatetc) override {
+		if (!pformatetc) return E_POINTER;
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			if ((Item->tymedMask & TYMED_MASK) & (pformatetc->tymed & TYMED_MASK)) return S_OK;
+		}
+		return DV_E_FORMATETC;
+	}
+	// GetCanonicalFormatEtc - "Do different target devices produce different data for this format?"
+	virtual HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(__RPC__in_opt FORMATETC* pformatectIn, __RPC__out FORMATETC* pformatetcOut) override {
+		// Always answer "no difference"
+		if (pformatetcOut) pformatetcOut->ptd = NULL;
+		return DATA_S_SAMEFORMATETC;
+	}
+	// SetData - the reverse direction: "Here is some data, do what you want with it."
+	virtual HRESULT STDMETHODCALLTYPE SetData(_In_ FORMATETC* pformatetc, _In_ STGMEDIUM* pmedium, BOOL fRelease) override {
+		if (!pformatetc || !pmedium) return E_POINTER;
+		for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
+			if (Item->cfFormat != pformatetc->cfFormat) continue;
+			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
+			if (!CommonTymed) continue;
+			HRESULT Result = Item->handler(pformatetc->cfFormat, CommonTymed, pformatetc->lindex, pformatetc->dwAspect, pmedium);
+			if (fRelease) ReleaseStgMedium(pmedium);
+			return Result;
+		}
+		return DV_E_FORMATETC;
+	}
+	// EnumFormatEtc - "list every format you can produce or accept."
+	virtual HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD dwDirection, __RPC__deref_out_opt IEnumFORMATETC** ppenumFormatEtc) override {
+		if (!ppenumFormatEtc) return E_POINTER;
+		*ppenumFormatEtc = NULL;
+		std::vector<FORMATETC> Items = {};
+		if (dwDirection == DATADIR_GET) {
+			Items.reserve(ProvidersLookup.size());
+			for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
+				// Strip the TYMED_HERE marker bit, the enumerator only reports real tymed values to outsiders.
+				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
+			}
+		}
+		else if (dwDirection == DATADIR_SET) {
+			Items.reserve(HandlersLookup.size());
+			for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
+				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
+			}
+		}
+		else {
+			return E_INVALIDARG;
+		}
+		return SHCreateStdEnumFmtEtc((UINT)Items.size(), Items.data(), ppenumFormatEtc);
+	}
+	// DAdvise / DUnadvise / EnumDAdvise - Completely unrelated to OLE Drag and Drop & OLE Clipboard.
+	virtual HRESULT STDMETHODCALLTYPE DAdvise(__RPC__in FORMATETC* pformatetc, DWORD advf, __RPC__in_opt IAdviseSink* pAdvSink, __RPC__out DWORD* pdwConnection) override { return OLE_E_ADVISENOTSUPPORTED; }
+	virtual HRESULT STDMETHODCALLTYPE DUnadvise(DWORD dwConnection) override { return OLE_E_ADVISENOTSUPPORTED; }
+	virtual HRESULT STDMETHODCALLTYPE EnumDAdvise(__RPC__deref_out_opt IEnumSTATDATA** ppenumAdvise) override { return OLE_E_ADVISENOTSUPPORTED; }
+	void RegisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask, DataProvider provider) {
+		ProvidersLookup.push_back({ cfFormat, tymedMask, std::move(provider) });
+	}
+	void UnregisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask) {
+		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end();) {
+			if (Item->cfFormat == cfFormat && Item->tymedMask == tymedMask) {
+				Item = ProvidersLookup.erase(Item);
+			}
+			else {
+				Item++;
+			}
+		}
+	}
+};
+// WebBrowserSite - This is where we invite IE into our window.
 class WebBrowserSite :
 	public IOleClientSite,
 	public IOleInPlaceSite,
@@ -408,9 +347,15 @@ class WebBrowserSite :
 	ExternalDispatch* ExtDisp = NULL;
 	HWND MainWindow = NULL;
 public:
-	WebBrowserSite(HWND hParent) :MainWindow(hParent) {
+	WebBrowserSite(HWND hParent, ExternalDispatch* SpecifiedDispatch = NULL) :MainWindow(hParent) {
 		InterlockedIncrement(&COM_REFERENCE_COUNTER);
-		ExtDisp = new ExternalDispatch();
+		if (SpecifiedDispatch) {
+			ExtDisp = SpecifiedDispatch;
+			SpecifiedDispatch->AddRef();
+		}
+		else {
+			ExtDisp = new ExternalDispatch();
+		}
 	}
 	~WebBrowserSite() {
 		if (ExtDisp) {
@@ -426,7 +371,7 @@ public:
     //  	IOleInPlaceSite : public IOleWindow
     //  	{
     //  	public:
-	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) override {
 		if (!ppvObject) return E_POINTER;
 		if (riid == IID_IUnknown || riid == IID_IOleClientSite) {
 			*ppvObject = static_cast<IOleClientSite*>(this);
@@ -465,148 +410,124 @@ public:
 		}
 		if (riid == IID_IServiceProvider) {
 			*ppvObject = static_cast<IServiceProvider*>(this);
+			AddRef();
+			return S_OK;
 		}
 		*ppvObject = NULL;
 		return E_NOINTERFACE;
 	}
-	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); };
-	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
+	virtual ULONG STDMETHODCALLTYPE AddRef(void) override { return InterlockedIncrement(&COM_REFERENCE_COUNTER); };
+	virtual ULONG STDMETHODCALLTYPE Release(void) override { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
 	// IOleClientSite implementations
-	virtual HRESULT STDMETHODCALLTYPE SaveObject(void) { return E_NOTIMPL; }
-	virtual HRESULT STDMETHODCALLTYPE GetMoniker(DWORD dwAssign, DWORD dwWhichMoniker, __RPC__deref_out_opt IMoniker** ppmk) {
+	virtual HRESULT STDMETHODCALLTYPE SaveObject(void) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetMoniker(DWORD dwAssign, DWORD dwWhichMoniker, __RPC__deref_out_opt IMoniker** ppmk) override {
 		if (ppmk) *ppmk = NULL;
 		return E_NOTIMPL;
 	}
-	virtual HRESULT STDMETHODCALLTYPE GetContainer(__RPC__deref_out_opt IOleContainer** ppContainer) {
+	virtual HRESULT STDMETHODCALLTYPE GetContainer(__RPC__deref_out_opt IOleContainer** ppContainer) override {
 		if (ppContainer) *ppContainer = NULL;
 		return E_NOINTERFACE;
 	}
-	virtual HRESULT STDMETHODCALLTYPE ShowObject(void) { return S_OK; }
-	virtual HRESULT STDMETHODCALLTYPE OnShowWindow(BOOL fShow) { return S_OK; }
-	virtual HRESULT STDMETHODCALLTYPE RequestNewObjectLayout(void) { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE ShowObject(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnShowWindow(BOOL fShow) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE RequestNewObjectLayout(void) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE CanInPlaceActivate(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnInPlaceActivate(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnUIActivate(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE GetWindowContext(__RPC__deref_out_opt IOleInPlaceFrame** ppFrame, __RPC__deref_out_opt IOleInPlaceUIWindow** ppDoc, __RPC__out LPRECT lprcPosRect, __RPC__out LPRECT lprcClipRect, __RPC__inout LPOLEINPLACEFRAMEINFO lpFrameInfo) override {
+		if (!ppFrame || !ppDoc || !lprcPosRect || !lprcClipRect || !lpFrameInfo) return E_POINTER;
+		// We are our own IOleInPlaceFrame (multiple inheritance pays off here):
+		// no need to allocate a separate frame object like AI version did.
+		// AddRef because IE takes a counted reference.
+		*ppFrame = static_cast<IOleInPlaceFrame*>(this);
+		AddRef();
+		// No separate UI doc window. Most non-MDI hosts return NULL here.
+		*ppDoc = NULL;
+		// Give IE the entire client area as both position and clip rect.
+		GetClientRect(MainWindow, lprcPosRect);
+		*lprcClipRect = *lprcPosRect;
+		// Frame info: we are not an MDI app, no accelerator table.
+		lpFrameInfo->cb = sizeof(OLEINPLACEFRAMEINFO);
+		lpFrameInfo->fMDIApp = FALSE;
+		lpFrameInfo->hwndFrame = MainWindow;
+		lpFrameInfo->haccel = NULL;
+		lpFrameInfo->cAccelEntries = 0;
+		return S_OK;
+	}
+	virtual HRESULT STDMETHODCALLTYPE Scroll(SIZE scrollExtant) override { return S_FALSE; }
+	virtual HRESULT STDMETHODCALLTYPE OnUIDeactivate(BOOL fUndoable) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnInPlaceDeactivate(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE DiscardUndoState(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE DeactivateAndUndo(void) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE OnPosRectChange(__RPC__in LPCRECT lprcPosRect) override { return E_NOTIMPL; }
+	virtual HRESULT STDMETHODCALLTYPE GetWindow(__RPC__deref_out_opt HWND* phwnd) override {
+		if (!phwnd) return E_POINTER;
+		*phwnd = MainWindow;
+		return S_OK;
+	}
+	virtual HRESULT STDMETHODCALLTYPE ContextSensitiveHelp(BOOL fEnterMode) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE InsertMenus(__RPC__in HMENU hmenuShared, __RPC__inout LPOLEMENUGROUPWIDTHS lpMenuWidths) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE SetMenu(__RPC__in HMENU hmenuShared, __RPC__in HOLEMENU holemenu, __RPC__in HWND hwndActiveObject) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE RemoveMenus(__RPC__in HMENU hmenuShared) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE SetStatusText(__RPC__in_opt LPCOLESTR pszStatusText) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE EnableModeless(BOOL fEnable) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(__RPC__in LPMSG lpmsg, WORD wID) override { return S_FALSE; }
+	// We don't have any space for toolbars!
+	virtual HRESULT STDMETHODCALLTYPE GetBorder(__RPC__out LPRECT lprectBorder) override { return INPLACE_E_NOTOOLSPACE; }
+	virtual HRESULT STDMETHODCALLTYPE RequestBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths) override { return INPLACE_E_NOTOOLSPACE; }
+	virtual HRESULT STDMETHODCALLTYPE SetBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths) override { if (!pborderwidths) return S_OK; return INPLACE_E_NOTOOLSPACE; }
+	virtual HRESULT STDMETHODCALLTYPE SetActiveObject(__RPC__in_opt IOleInPlaceActiveObject* pActiveObject, __RPC__in_opt_string LPCOLESTR pszObjName) override { return S_OK; }
+	virtual HRESULT STDMETHODCALLTYPE ShowContextMenu(_In_ DWORD dwID, _In_ POINT* ppt, _In_ IUnknown* pcmdtReserved, _In_ IDispatch* pdispReserved) override;
+	virtual HRESULT STDMETHODCALLTYPE GetHostInfo(_Inout_ DOCHOSTUIINFO* pInfo) override;
+	virtual HRESULT STDMETHODCALLTYPE ShowUI(_In_ DWORD dwID, _In_ IOleInPlaceActiveObject* pActiveObject, _In_ IOleCommandTarget* pCommandTarget, _In_ IOleInPlaceFrame* pFrame, _In_ IOleInPlaceUIWindow* pDoc) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE CanInPlaceActivate(void);
+	virtual HRESULT STDMETHODCALLTYPE HideUI(void) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE OnInPlaceActivate(void);
+	virtual HRESULT STDMETHODCALLTYPE UpdateUI(void) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE OnUIActivate(void);
+	virtual HRESULT STDMETHODCALLTYPE OnDocWindowActivate(BOOL fActivate) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetWindowContext(__RPC__deref_out_opt IOleInPlaceFrame** ppFrame, __RPC__deref_out_opt IOleInPlaceUIWindow** ppDoc, __RPC__out LPRECT lprcPosRect, __RPC__out LPRECT lprcClipRect, __RPC__inout LPOLEINPLACEFRAMEINFO lpFrameInfo);
+	virtual HRESULT STDMETHODCALLTYPE OnFrameWindowActivate(BOOL fActivate) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE Scroll(SIZE scrollExtant);
+	virtual HRESULT STDMETHODCALLTYPE ResizeBorder(_In_ LPCRECT prcBorder, _In_ IOleInPlaceUIWindow* pUIWindow, _In_ BOOL fRameWindow) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE OnUIDeactivate(BOOL fUndoable);
+	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(LPMSG lpMsg, const GUID* pguidCmdGroup, DWORD nCmdID) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE OnInPlaceDeactivate(void);
+	virtual HRESULT STDMETHODCALLTYPE GetOptionKeyPath(_Out_ LPOLESTR* pchKey, DWORD dw) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE DiscardUndoState(void);
+	virtual HRESULT STDMETHODCALLTYPE GetDropTarget(_In_ IDropTarget* pDropTarget, _Outptr_ IDropTarget** ppDropTarget) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE DeactivateAndUndo(void);
+	virtual HRESULT STDMETHODCALLTYPE GetExternal(_Outptr_result_maybenull_ IDispatch** ppDispatch) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE OnPosRectChange(__RPC__in LPCRECT lprcPosRect);
+	virtual HRESULT STDMETHODCALLTYPE TranslateUrl(DWORD dwTranslate, _In_ LPWSTR pchURLIn, _Outptr_ LPWSTR* ppchURLOut) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetWindow(__RPC__deref_out_opt HWND* phwnd);
+	virtual HRESULT STDMETHODCALLTYPE FilterDataObject(_In_ IDataObject* pDO, _Outptr_result_maybenull_ IDataObject** ppDORet) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE ContextSensitiveHelp(BOOL fEnterMode);
+	virtual HRESULT STDMETHODCALLTYPE DragEnter(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE InsertMenus(__RPC__in HMENU hmenuShared, __RPC__inout LPOLEMENUGROUPWIDTHS lpMenuWidths);
+	virtual HRESULT STDMETHODCALLTYPE DragOver(DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE SetMenu(__RPC__in HMENU hmenuShared, __RPC__in HOLEMENU holemenu, __RPC__in HWND hwndActiveObject);
+	virtual HRESULT STDMETHODCALLTYPE DragLeave(void) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE RemoveMenus(__RPC__in HMENU hmenuShared);
+	virtual HRESULT STDMETHODCALLTYPE Drop(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE SetStatusText(__RPC__in_opt LPCOLESTR pszStatusText);
-
-
-	virtual HRESULT STDMETHODCALLTYPE EnableModeless(BOOL fEnable);
-
-
-	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(__RPC__in LPMSG lpmsg, WORD wID);
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetBorder(__RPC__out LPRECT lprectBorder);
-
-
-	virtual HRESULT STDMETHODCALLTYPE RequestBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths);
-
-
-	virtual HRESULT STDMETHODCALLTYPE SetBorderSpace(__RPC__in_opt LPCBORDERWIDTHS pborderwidths);
-
-
-	virtual HRESULT STDMETHODCALLTYPE SetActiveObject(__RPC__in_opt IOleInPlaceActiveObject* pActiveObject, __RPC__in_opt_string LPCOLESTR pszObjName);
-
-
-	virtual HRESULT STDMETHODCALLTYPE ShowContextMenu(_In_ DWORD dwID, _In_ POINT* ppt, _In_ IUnknown* pcmdtReserved, _In_ IDispatch* pdispReserved);
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetHostInfo(_Inout_ DOCHOSTUIINFO* pInfo);
-
-
-	virtual HRESULT STDMETHODCALLTYPE ShowUI(_In_ DWORD dwID, _In_ IOleInPlaceActiveObject* pActiveObject, _In_ IOleCommandTarget* pCommandTarget, _In_ IOleInPlaceFrame* pFrame, _In_ IOleInPlaceUIWindow* pDoc);
-
-
-	virtual HRESULT STDMETHODCALLTYPE HideUI(void);
-
-
-	virtual HRESULT STDMETHODCALLTYPE UpdateUI(void);
-
-
-	virtual HRESULT STDMETHODCALLTYPE OnDocWindowActivate(BOOL fActivate);
-
-
-	virtual HRESULT STDMETHODCALLTYPE OnFrameWindowActivate(BOOL fActivate);
-
-
-	virtual HRESULT STDMETHODCALLTYPE ResizeBorder(_In_ LPCRECT prcBorder, _In_ IOleInPlaceUIWindow* pUIWindow, _In_ BOOL fRameWindow);
-
-
-	virtual HRESULT STDMETHODCALLTYPE TranslateAccelerator(LPMSG lpMsg, const GUID* pguidCmdGroup, DWORD nCmdID);
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetOptionKeyPath(_Out_ LPOLESTR* pchKey, DWORD dw);
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetDropTarget(_In_ IDropTarget* pDropTarget, _Outptr_ IDropTarget** ppDropTarget);
-
-
-	virtual HRESULT STDMETHODCALLTYPE GetExternal(_Outptr_result_maybenull_ IDispatch** ppDispatch);
-
-
-	virtual HRESULT STDMETHODCALLTYPE TranslateUrl(DWORD dwTranslate, _In_ LPWSTR pchURLIn, _Outptr_ LPWSTR* ppchURLOut);
-
-
-	virtual HRESULT STDMETHODCALLTYPE FilterDataObject(_In_ IDataObject* pDO, _Outptr_result_maybenull_ IDataObject** ppDORet);
-
-
-	virtual HRESULT STDMETHODCALLTYPE DragEnter(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
-
-
-	virtual HRESULT STDMETHODCALLTYPE DragOver(DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
-
-
-	virtual HRESULT STDMETHODCALLTYPE DragLeave(void);
-
-
-	virtual HRESULT STDMETHODCALLTYPE Drop(__RPC__in_opt IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, __RPC__inout DWORD* pdwEffect);
-
-
-	virtual HRESULT STDMETHODCALLTYPE QueryService(_In_ REFGUID guidService, _In_ REFIID riid, _Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
+	virtual HRESULT STDMETHODCALLTYPE QueryService(_In_ REFGUID guidService, _In_ REFIID riid, _Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) override {
 		if (!ppvObject) return E_POINTER;
 		if (guidService == SID_SInternetHostSecurityManager && riid == IID_IInternetSecurityManager) {
 			*ppvObject = static_cast<IInternetSecurityManager*>(this);
@@ -618,40 +539,40 @@ public:
 	}
 
 
-	virtual HRESULT STDMETHODCALLTYPE SetSecuritySite(__RPC__in_opt IInternetSecurityMgrSite* pSite);
+	virtual HRESULT STDMETHODCALLTYPE SetSecuritySite(__RPC__in_opt IInternetSecurityMgrSite* pSite) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetSecuritySite(__RPC__deref_out_opt IInternetSecurityMgrSite** ppSite);
+	virtual HRESULT STDMETHODCALLTYPE GetSecuritySite(__RPC__deref_out_opt IInternetSecurityMgrSite** ppSite) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE MapUrlToZone(__RPC__in LPCWSTR pwszUrl, __RPC__out DWORD* pdwZone, DWORD dwFlags);
+	virtual HRESULT STDMETHODCALLTYPE MapUrlToZone(__RPC__in LPCWSTR pwszUrl, __RPC__out DWORD* pdwZone, DWORD dwFlags) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetSecurityId(_In_ LPCWSTR pwszUrl, _Out_writes_bytes_to_(MAX_SIZE_SECURITY_ID, *pcbSecurityId) BYTE* pbSecurityId, _Inout_ _At_(*pcbSecurityId, _In_range_(>= , MAX_SIZE_SECURITY_ID) _Out_range_(0, MAX_SIZE_SECURITY_ID)) DWORD* pcbSecurityId, _In_ DWORD_PTR dwReserved);
+	virtual HRESULT STDMETHODCALLTYPE GetSecurityId(_In_ LPCWSTR pwszUrl, _Out_writes_bytes_to_(MAX_SIZE_SECURITY_ID, *pcbSecurityId) BYTE* pbSecurityId, _Inout_ _At_(*pcbSecurityId, _In_range_(>= , MAX_SIZE_SECURITY_ID) _Out_range_(0, MAX_SIZE_SECURITY_ID)) DWORD* pcbSecurityId, _In_ DWORD_PTR dwReserved) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE ProcessUrlAction(__RPC__in LPCWSTR pwszUrl, DWORD dwAction, __RPC__out_ecount_full(cbPolicy) BYTE* pPolicy, DWORD cbPolicy, __RPC__in_opt BYTE* pContext, DWORD cbContext, DWORD dwFlags, DWORD dwReserved);
+	virtual HRESULT STDMETHODCALLTYPE ProcessUrlAction(__RPC__in LPCWSTR pwszUrl, DWORD dwAction, __RPC__out_ecount_full(cbPolicy) BYTE* pPolicy, DWORD cbPolicy, __RPC__in_opt BYTE* pContext, DWORD cbContext, DWORD dwFlags, DWORD dwReserved) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE QueryCustomPolicy(__RPC__in LPCWSTR pwszUrl, __RPC__in REFGUID guidKey, __RPC__deref_out_ecount_full_opt(*pcbPolicy) BYTE** ppPolicy, __RPC__out DWORD* pcbPolicy, __RPC__in BYTE* pContext, DWORD cbContext, DWORD dwReserved);
+	virtual HRESULT STDMETHODCALLTYPE QueryCustomPolicy(__RPC__in LPCWSTR pwszUrl, __RPC__in REFGUID guidKey, __RPC__deref_out_ecount_full_opt(*pcbPolicy) BYTE** ppPolicy, __RPC__out DWORD* pcbPolicy, __RPC__in BYTE* pContext, DWORD cbContext, DWORD dwReserved) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE SetZoneMapping(DWORD dwZone, __RPC__in LPCWSTR lpszPattern, DWORD dwFlags);
+	virtual HRESULT STDMETHODCALLTYPE SetZoneMapping(DWORD dwZone, __RPC__in LPCWSTR lpszPattern, DWORD dwFlags) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetZoneMappings(DWORD dwZone, __RPC__deref_out_opt IEnumString** ppenumString, DWORD dwFlags);
+	virtual HRESULT STDMETHODCALLTYPE GetZoneMappings(DWORD dwZone, __RPC__deref_out_opt IEnumString** ppenumString, DWORD dwFlags) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo);
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfoCount(__RPC__out UINT* pctinfo) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo);
+	virtual HRESULT STDMETHODCALLTYPE GetTypeInfo(UINT iTInfo, LCID lcid, __RPC__deref_out_opt ITypeInfo** ppTInfo) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId);
+	virtual HRESULT STDMETHODCALLTYPE GetIDsOfNames(__RPC__in REFIID riid, __RPC__in_ecount_full(cNames) LPOLESTR* rgszNames, __RPC__in_range(0, 16384) UINT cNames, LCID lcid, __RPC__out_ecount_full(cNames) DISPID* rgDispId) override;
 
 
-	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr);
+	virtual HRESULT STDMETHODCALLTYPE Invoke(_In_ DISPID dispIdMember, _In_ REFIID riid, _In_ LCID lcid, _In_ WORD wFlags, _In_ DISPPARAMS* pDispParams, _Out_opt_ VARIANT* pVarResult, _Out_opt_ EXCEPINFO* pExcepInfo, _Out_opt_ UINT* puArgErr) override;
 
 };
 
@@ -1220,8 +1141,8 @@ inline void TridentShutdown() {
 // We verify both the window class name and that GWLP_USERDATA points to a live hTrident.
 inline bool IsTridentHostWindow(HWND hwnd) {
 	if (!hwnd) return false;
-	wchar_t cls[LONG_MAX_PATH] = {};
-	if (!GetClassNameW(hwnd, cls, LONG_MAX_PATH)) return false;
+	wchar_t cls[MAX_PATH] = {};
+	if (!GetClassNameW(hwnd, cls, MAX_PATH)) return false;
 	if (lstrcmpW(cls, g_trident_wndclass) != 0) return false;
 	hTrident h = (hTrident)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 	return h && h->alive && h->hwnd == hwnd;
@@ -1365,8 +1286,8 @@ inline void NavigateTo(hTrident h, const wchar_t* url) {
 }
 
 inline void NavigateToRes(hTrident h, const wchar_t* resName) {
-	wchar_t exe[LONG_MAX_PATH] = {};
-	GetModuleFileNameW(NULL, exe, LONG_MAX_PATH);
+	wchar_t exe[MAX_PATH] = {};
+	GetModuleFileNameW(NULL, exe, MAX_PATH);
 	std::wstring url = L"res://";
 	url += exe;
 	url += L"/";
@@ -2892,134 +2813,6 @@ public:
 		return hr;
 	}
 	STDMETHODIMP LockServer(BOOL) override { return S_OK; }
-};
-
-using DataProvider = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
-using DataHandler = std::function<HRESULT(CLIPFORMAT, DWORD, LONG, DWORD, STGMEDIUM*)>;
-static constexpr DWORD TYMED_MASK = 0x7FFFFFFF;
-static constexpr DWORD TYMED_HERE = 0x80000000;
-class TridentUniversalDataTransferProtocol : public IDataObject {
-	ULONG COM_REFERENCE_COUNTER = 0;
-	struct ProviderEntry {
-		CLIPFORMAT cfFormat;
-		DWORD tymedMask;
-		DataProvider provider;
-	};
-	struct HandlerEntry {
-		CLIPFORMAT cfFormat;
-		DWORD tymedMask;
-		DataHandler handler;
-	};
-	std::vector<ProviderEntry> ProvidersLookup = {};
-	std::vector<HandlerEntry> HandlersLookup = {};
-public:
-	TridentUniversalDataTransferProtocol() { InterlockedIncrement(&COM_REFERENCE_COUNTER); }
-	virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, _COM_Outptr_ void __RPC_FAR* __RPC_FAR* ppvObject) {
-		if (!ppvObject) return E_POINTER;
-		if (riid == IID_IUnknown || riid == IID_IDataObject) {
-			*ppvObject = static_cast<IDataObject*>(this);
-			AddRef();
-			return S_OK;
-		}
-		*ppvObject = NULL;
-		return E_NOINTERFACE;
-	}
-	virtual ULONG STDMETHODCALLTYPE AddRef(void) { return InterlockedIncrement(&COM_REFERENCE_COUNTER); }
-	virtual ULONG STDMETHODCALLTYPE Release(void) { ULONG HOLD = InterlockedDecrement(&COM_REFERENCE_COUNTER); if (!HOLD) delete this; return HOLD; }
-	// GetData - "Give me the data for this format, you pick the medium."
-	virtual HRESULT STDMETHODCALLTYPE GetData(_In_ FORMATETC* pformatetcIn, _Out_ STGMEDIUM* pmedium) {
-		if (!pformatetcIn || !pmedium) return E_POINTER;
-		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
-			if (Item->cfFormat != pformatetcIn->cfFormat) continue;
-			if (Item->tymedMask & TYMED_HERE) continue; // filter out 'here' entries
-			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pformatetcIn->tymed & TYMED_MASK);
-			if (!CommonTymed) continue;
-			ZeroMemory(pmedium, sizeof(STGMEDIUM));
-			return Item->provider(pformatetcIn->cfFormat, CommonTymed, pformatetcIn->lindex, pformatetcIn->dwAspect, pmedium);
-		}
-		return DV_E_FORMATETC;
-	}
-	// GetDataHere - "I already allocated the medium, write into it."
-	virtual HRESULT STDMETHODCALLTYPE GetDataHere(_In_ FORMATETC* pformatetc, _Inout_ STGMEDIUM* pmedium) {
-		if (!pformatetc || !pmedium) return E_POINTER;
-		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
-			if (Item->cfFormat != pformatetc->cfFormat) continue;
-			if (!(Item->tymedMask & TYMED_HERE)) continue; // only 'here' entries
-			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
-			if (!CommonTymed) continue;
-			// No ZeroMemory!
-			return Item->provider(pformatetc->cfFormat, CommonTymed | TYMED_HERE, pformatetc->lindex, pformatetc->dwAspect, pmedium);
-		}
-		return DV_E_FORMATETC;
-	}
-	// QueryGetData - "Do you support this format at all?"
-	virtual HRESULT STDMETHODCALLTYPE QueryGetData(__RPC__in_opt FORMATETC* pformatetc) {
-		if (!pformatetc) return E_POINTER;
-		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
-			if (Item->cfFormat != pformatetc->cfFormat) continue;
-			if ((Item->tymedMask & TYMED_MASK) & (pformatetc->tymed & TYMED_MASK)) return S_OK;
-		}
-		return DV_E_FORMATETC;
-	}
-	// GetCanonicalFormatEtc - "Do different target devices produce different data for this format?"
-	virtual HRESULT STDMETHODCALLTYPE GetCanonicalFormatEtc(__RPC__in_opt FORMATETC* pformatectIn, __RPC__out FORMATETC* pformatetcOut) {
-		// Always answer "no difference"
-		if (pformatetcOut) pformatetcOut->ptd = NULL;
-		return DATA_S_SAMEFORMATETC;
-	}
-	// SetData - the reverse direction: "Here is some data, do what you want with it."
-	virtual HRESULT STDMETHODCALLTYPE SetData(_In_ FORMATETC* pformatetc, _In_ STGMEDIUM* pmedium, BOOL fRelease) {
-		if (!pformatetc || !pmedium) return E_POINTER;
-		for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
-			if (Item->cfFormat != pformatetc->cfFormat) continue;
-			const DWORD CommonTymed = (Item->tymedMask & TYMED_MASK) & (pmedium->tymed & TYMED_MASK);
-			if (!CommonTymed) continue;
-			HRESULT Result = Item->handler(pformatetc->cfFormat, CommonTymed, pformatetc->lindex, pformatetc->dwAspect, pmedium);
-			if (fRelease) ReleaseStgMedium(pmedium);
-			return Result;
-		}
-		return DV_E_FORMATETC;
-	}
-	// EnumFormatEtc - "list every format you can produce or accept."
-	virtual HRESULT STDMETHODCALLTYPE EnumFormatEtc(DWORD dwDirection, __RPC__deref_out_opt IEnumFORMATETC** ppenumFormatEtc) {
-		if (!ppenumFormatEtc) return E_POINTER;
-		*ppenumFormatEtc = NULL;
-		std::vector<FORMATETC> Items = {};
-		if (dwDirection == DATADIR_GET) {
-			Items.reserve(ProvidersLookup.size());
-			for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end(); Item++) {
-				// Strip the TYMED_HERE marker bit, the enumerator only reports real tymed values to outsiders.
-				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
-			}
-		}
-		else if (dwDirection == DATADIR_SET) {
-			Items.reserve(HandlersLookup.size());
-			for (auto Item = HandlersLookup.begin(); Item != HandlersLookup.end(); Item++) {
-				Items.push_back({ Item->cfFormat, NULL, DVASPECT_CONTENT, -1, Item->tymedMask & TYMED_MASK });
-			}
-		}
-		else {
-			return E_INVALIDARG;
-		}
-		return SHCreateStdEnumFmtEtc((UINT)Items.size(), Items.data(), ppenumFormatEtc);
-	}
-	// DAdvise / DUnadvise / EnumDAdvise - Completely unrelated to OLE Dnd & OLE Clipboard.
-	virtual HRESULT STDMETHODCALLTYPE DAdvise(__RPC__in FORMATETC* pformatetc, DWORD advf, __RPC__in_opt IAdviseSink* pAdvSink, __RPC__out DWORD* pdwConnection) { return OLE_E_ADVISENOTSUPPORTED; }
-	virtual HRESULT STDMETHODCALLTYPE DUnadvise(DWORD dwConnection) { return OLE_E_ADVISENOTSUPPORTED; }
-	virtual HRESULT STDMETHODCALLTYPE EnumDAdvise(__RPC__deref_out_opt IEnumSTATDATA** ppenumAdvise) { return OLE_E_ADVISENOTSUPPORTED; }
-	void RegisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask, DataProvider provider) {
-		ProvidersLookup.push_back({ cfFormat, tymedMask, std::move(provider) });
-	}
-	void UnregisterProvider(CLIPFORMAT cfFormat, DWORD tymedMask) {
-		for (auto Item = ProvidersLookup.begin(); Item != ProvidersLookup.end();) {
-			if (Item->cfFormat == cfFormat && Item->tymedMask == tymedMask) {
-				Item = ProvidersLookup.erase(Item);
-			}
-			else {
-				Item++;
-			}
-		}
-	}
 };
 
 // ActiveX API implementations
