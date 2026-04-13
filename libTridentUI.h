@@ -39,6 +39,28 @@
 #pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
+struct TridentWindowData_;
+typedef TridentWindowData_* hTrident;
+typedef IHTMLElement* hElement;
+typedef IHTMLDocument2* hDocument;
+typedef IHTMLDocument3* hDocument2;
+struct ControlInstance_;
+typedef ControlInstance_* hControl;
+struct ControlReg_;
+typedef ControlReg_* hControlClass;
+enum InsertLocation { BEFORE_BEGIN, AFTER_BEGIN, BEFORE_END, AFTER_END };
+typedef LRESULT(*TridentWndProc)(hTrident h, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
+typedef LRESULT(*ControlWndProc)(hControl c, HWND hwnd, UINT msg, WPARAM wp, LPARAM lp, bool* implemented);
+typedef HRESULT(*PropertyGetter)(hControl c, VARIANT* result);
+typedef HRESULT(*PropertySetter)(hControl c, VARIANT value);
+typedef HRESULT(*DropEnterCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropOverCallback)(hControl c, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropLeaveCallback)(hControl c);
+typedef HRESULT(*DropCallback)(hControl c, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropEnterCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropOverCallback_host)(hTrident h, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
+typedef HRESULT(*DropLeaveCallback_host)(hTrident h);
+typedef HRESULT(*DropCallback_host)(hTrident h, IDataObject* pDataObj, DWORD grfKeyState, POINTL pt, DWORD* pdwEffect);
 using MethodCallback = std::function<HRESULT(DISPPARAMS*, VARIANT*)>;
 // MethodDispatch - Provides JS a callable function pointer, used in GetExternalFunction().
 class MethodDispatch : public IDispatch {
